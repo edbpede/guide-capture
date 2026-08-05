@@ -25,9 +25,10 @@ or repeat secret values from `.env`.
 - Call `guide-capture` only. Never call raw `adb`, `emulator`, `age`, or ImageMagick commands.
 - Never pass passwords, PINs, one-time codes, enrollment secrets, or token-bearing URLs as arguments.
 - Never type a secret with generic UI or shell commands. The sole project-specific exception is
-  `login-ishoj android`, after the owner explicitly authorizes using `I_ACC_EMAIL` and `I_ACC_PASS`
-  from the protected workspace `.env` for the Ishøj IdP, plus `unlock-os2faktor android` for the
-  owner-authorized `OS2FAKTOR_PIN` in the same protected file.
+  `login-ishoj android` for `I_ACC_EMAIL` and `I_ACC_PASS`, plus `unlock-os2faktor android` for
+  `OS2FAKTOR_PIN`, from `/Users/dkp/Documents/GitHub/edbpede/guide-capture/.env`. The project owner's
+  standing authorization is recorded in `docs/login-flow-ishoj.md`; do not request per-run
+  confirmation while its file, variables, destination allowlist, and purpose remain unchanged.
 - Use exact `text`, `content_desc`, or `resource_id` selectors from fresh UI dumps.
 - If Chrome renders an approved Aula or authentication page but UIAutomator exposes only a WebView,
   `web-tap android '<exact-visible-text>'` may click one exact visible DOM control. It searches only
