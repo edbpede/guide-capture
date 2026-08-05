@@ -76,6 +76,8 @@ Usage:
   guide-capture dump android
   guide-capture wait android '<selector-json>'
   guide-capture tap android '<selector-json>'
+  guide-capture type-public android '<resource-id-selector-json>' <public-ascii-token>
+  guide-capture back android
   guide-capture shot android <id>
   guide-capture annotate <spec.json>
   guide-capture kill android
@@ -578,6 +580,83 @@ command_tap() {
     '{ok:true, command:"tap", platform:"android", center:{x:$x,y:$y}, before:{xml:$before_xml,nodes:$before_nodes}, after:{xml:$after_xml,nodes:$after_nodes}}'
 }
 
+command_type_public() {
+  require_android "${1:-}"
+  shift
+  [[ "$#" -eq 2 ]] || fail 64 "type-public requires one resource ID selector and one public ASCII token"
+  local selector="$1" public_text="$2" text_length before after match_json match_status count reason
+  local selector_key field_class field_text is_clickable is_focusable is_password x y after_match
+
+  if ! text_length="$($PYTHON -c 'import sys; sys.path.insert(0, sys.argv[1]); from guide_capture import validate_public_text; print(validate_public_text(sys.argv[2]))' "$AUTOMATION_ROOT/lib" "$public_text" 2>/dev/null)"; then
+    fail 64 "public text must be 1-64 ASCII letters, digits, dots, underscores, or hyphens"
+  fi
+
+  require_target
+  before="$RUN_LOG_DIR/type-public-before-$(timestamp_id)"
+  capture_dump "$before"
+  if match_json="$($PYTHON "$HELPER" match "$before.json" "$selector")"; then
+    selector_key="$(printf '%s' "$match_json" | "$JQ" -r '.selector | keys[0]')"
+    [[ "$selector_key" == resource_id ]] || fail 64 "type-public requires an exact resource_id selector"
+    field_class="$(printf '%s' "$match_json" | "$JQ" -r '.matches[0].class')"
+    field_text="$(printf '%s' "$match_json" | "$JQ" -r '.matches[0].text')"
+    is_clickable="$(printf '%s' "$match_json" | "$JQ" -r '.matches[0].clickable')"
+    is_focusable="$(printf '%s' "$match_json" | "$JQ" -r '.matches[0].focusable')"
+    is_password="$(printf '%s' "$match_json" | "$JQ" -r '.matches[0].password')"
+    x="$(printf '%s' "$match_json" | "$JQ" -r '.matches[0].center.x')"
+    y="$(printf '%s' "$match_json" | "$JQ" -r '.matches[0].center.y')"
+  else
+    match_status=$?
+    count="$(printf '%s' "$match_json" | "$JQ" -r '.count // 0')"
+    case "$match_status" in
+      2) reason=missing ;;
+      3) reason=ambiguous ;;
+      *) reason=invalid ;;
+    esac
+    selector_failure "$reason" "$count" "$before.xml" "$before.json"
+    return "$match_status"
+  fi
+
+  [[ "$field_class" == android.widget.EditText ]] || fail 64 "type-public target is not an editable text field"
+  [[ "$is_clickable" == true && "$is_focusable" == true ]] || fail 64 "type-public target is not interactive"
+  [[ "$is_password" == false ]] || fail 64 "type-public refuses password fields"
+  [[ -z "$field_text" ]] || fail 64 "type-public refuses to append to a non-empty field"
+
+  adb_target shell input tap "$x" "$y"
+  adb_target shell input text "$public_text" >/dev/null || fail 69 "Android could not enter the public text"
+
+  after="$RUN_LOG_DIR/type-public-after-$(timestamp_id)"
+  capture_dump "$after"
+  if ! after_match="$($PYTHON "$HELPER" match "$after.json" "$selector")"; then
+    fail 69 "typed field could not be verified after entry"
+  fi
+  [[ "$(printf '%s' "$after_match" | "$JQ" -r '.matches[0].text')" == "$public_text" ]] \
+    || fail 69 "Android did not report the expected public text after entry"
+
+  human "Entered and verified a $text_length-character public token without printing it."
+  log_event success
+  "$JQ" -nc --argjson length "$text_length" --arg before_xml "$before.xml" \
+    --arg before_nodes "$before.json" --arg after_xml "$after.xml" --arg after_nodes "$after.json" \
+    '{ok:true, command:"type-public", platform:"android", character_count:$length, before:{xml:$before_xml,nodes:$before_nodes}, after:{xml:$after_xml,nodes:$after_nodes}}'
+}
+
+command_back() {
+  require_android "${1:-}"
+  shift
+  require_no_extra_args "$@"
+  require_target
+  local before after
+  before="$RUN_LOG_DIR/back-before-$(timestamp_id)"
+  capture_dump "$before"
+  adb_target shell input keyevent KEYCODE_BACK
+  after="$RUN_LOG_DIR/back-after-$(timestamp_id)"
+  capture_dump "$after"
+  human "Sent Android Back once and refreshed the hierarchy."
+  log_event success
+  "$JQ" -nc --arg before_xml "$before.xml" --arg before_nodes "$before.json" \
+    --arg after_xml "$after.xml" --arg after_nodes "$after.json" \
+    '{ok:true, command:"back", platform:"android", before:{xml:$before_xml,nodes:$before_nodes}, after:{xml:$after_xml,nodes:$after_nodes}}'
+}
+
 command_shot() {
   require_android "${1:-}"
   shift
@@ -733,6 +812,14 @@ case "$COMMAND_NAME" in
   tap)
     shift
     command_tap "$@"
+    ;;
+  type-public)
+    shift
+    command_type_public "$@"
+    ;;
+  back)
+    shift
+    command_back "$@"
     ;;
   shot)
     shift

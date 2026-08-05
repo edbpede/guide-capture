@@ -21,6 +21,7 @@ from urllib.parse import urlsplit
 BOUNDS_RE = re.compile(r"^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$")
 VERSION_CODE_RE = re.compile(r"\bversionCode=(\d+)\b")
 SELECTOR_KEYS = {"text", "content_desc", "resource_id"}
+PUBLIC_TEXT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 STEP_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 PACKAGE_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
@@ -72,6 +73,9 @@ def normalize_nodes(xml_path: Path) -> list[dict[str, object]]:
                 "class": element.attrib.get("class", ""),
                 "clickable": element.attrib.get("clickable") == "true",
                 "enabled": element.attrib.get("enabled") == "true",
+                "focusable": element.attrib.get("focusable") == "true",
+                "focused": element.attrib.get("focused") == "true",
+                "password": element.attrib.get("password") == "true",
                 "bounds": bounds,
                 "center": center,
             }
@@ -96,6 +100,15 @@ def parse_selector(raw: str) -> dict[str, str]:
 def find_matches(nodes: list[dict[str, object]], selector: dict[str, str]) -> list[dict[str, object]]:
     key, value = next(iter(selector.items()))
     return [node for node in nodes if node["enabled"] and node[key] == value]
+
+
+def validate_public_text(raw: str) -> int:
+    """Validate a short, non-secret token safe for Android's `input text` command."""
+    if not PUBLIC_TEXT_RE.fullmatch(raw):
+        raise ValueError(
+            "public text must be 1-64 ASCII letters, digits, dots, underscores, or hyphens"
+        )
+    return len(raw)
 
 
 def parse_package_version_code(output: str) -> str:

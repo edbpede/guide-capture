@@ -72,6 +72,18 @@ Use this sequence for a step with `find`:
 6. Run `wait android '<expect_after-selector>'` when `expect_after` exists.
 7. Inspect the refreshed hierarchy and confirm the intended state, not merely a zero exit code.
 
+For a declared non-secret search token, `type-public android '<resource-id-selector>' <token>` may
+be used only when the fresh hierarchy exposes one empty, non-password `android.widget.EditText`
+with a stable resource ID. The token is deliberately limited to 1-64 ASCII letters, digits, dots,
+underscores, or hyphens. Use the shortest public prefix that produces the intended exact result;
+for example, type `Ish` and then select the visible exact Danish result `Ishøj Kommune`. Never use
+`type-public` for an email address, username, password, PIN, one-time code, personal identifier, or
+token, even if it would pass the character restrictions.
+
+Use `back android` only after visual or hierarchy evidence confirms a transient Android or keyboard
+overlay that should be dismissed. It sends Back exactly once and saves before/after evidence; do
+not use it speculatively for webpage navigation.
+
 For a capture-only step without `find`, dump and verify the intended state, then take the shot. Do
 not manufacture an action.
 

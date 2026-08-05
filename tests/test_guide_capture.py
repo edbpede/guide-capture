@@ -21,6 +21,7 @@ from guide_capture import (  # noqa: E402
     parse_package_version_code,
     parse_selector,
     process_annotation_spec,
+    validate_public_text,
     validate_annotation_spec,
 )
 
@@ -30,7 +31,8 @@ XML = """<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
   <node text="" content-desc="" resource-id="root" class="android.widget.FrameLayout"
     clickable="false" enabled="true" bounds="[0,0][1080,2400]">
     <node text="Filer" content-desc="" resource-id="dk.example:id/files"
-      class="android.widget.TextView" clickable="true" enabled="true" bounds="[10,20][110,80]" />
+      class="android.widget.TextView" clickable="true" enabled="true" focusable="true"
+      focused="false" password="false" bounds="[10,20][110,80]" />
     <node text="Filer" content-desc="disabled" resource-id="dk.example:id/disabled"
       class="android.widget.TextView" clickable="true" enabled="false" bounds="[10,90][110,150]" />
   </node>
@@ -55,6 +57,9 @@ class GuideCaptureTests(unittest.TestCase):
         self.assertEqual(files["center"], {"x": 60, "y": 50})
         self.assertTrue(files["enabled"])
         self.assertTrue(files["clickable"])
+        self.assertTrue(files["focusable"])
+        self.assertFalse(files["focused"])
+        self.assertFalse(files["password"])
 
     def test_exact_selector_ignores_disabled_match(self) -> None:
         nodes = normalize_nodes(self.xml_path)
@@ -72,6 +77,14 @@ class GuideCaptureTests(unittest.TestCase):
         duplicate["resource_id"] = "dk.example:id/files-copy"
         matches = find_matches(nodes + [duplicate], parse_selector('{"text":"Filer"}'))
         self.assertEqual(len(matches), 2)
+
+    def test_public_text_accepts_short_ascii_search_token(self) -> None:
+        self.assertEqual(validate_public_text("Ish"), 3)
+
+    def test_public_text_rejects_spaces_unicode_and_shell_metacharacters(self) -> None:
+        for value in ("Ishøj", "Ish kommune", "Ish;id", "$(id)"):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                validate_public_text(value)
 
     def test_package_version_code_allows_android_indentation(self) -> None:
         output = "    versionCode=30201 minSdk=23 targetSdk=35\n"
