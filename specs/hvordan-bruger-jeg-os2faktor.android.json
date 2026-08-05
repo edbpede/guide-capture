@@ -25,7 +25,7 @@
       "id": "02",
       "annotate": {
         "type": "highlight",
-        "bounds": [0, 420, 710, 565],
+        "bounds": [0, 440, 600, 525],
         "number": 2
       },
       "redact": []
@@ -34,7 +34,7 @@
       "id": "03",
       "annotate": {
         "type": "highlight",
-        "bounds": [108, 1180, 975, 1395],
+        "bounds": [108, 1195, 975, 1375],
         "number": 3
       },
       "redact": []
@@ -43,7 +43,7 @@
       "id": "04",
       "annotate": {
         "type": "highlight",
-        "bounds": [900, 285, 1060, 440],
+        "bounds": [920, 285, 1075, 440],
         "number": 4
       },
       "redact": []
@@ -52,7 +52,7 @@
       "id": "05",
       "annotate": {
         "type": "highlight",
-        "bounds": [210, 955, 800, 1095],
+        "bounds": [170, 990, 615, 1090],
         "number": 5
       },
       "redact": [
@@ -66,7 +66,7 @@
       "id": "06",
       "annotate": {
         "type": "highlight",
-        "bounds": [95, 720, 990, 1520],
+        "bounds": [185, 700, 900, 1520],
         "number": 6
       },
       "redact": [
@@ -80,7 +80,7 @@
       "id": "07",
       "annotate": {
         "type": "highlight",
-        "bounds": [450, 395, 760, 560],
+        "bounds": [500, 475, 735, 545],
         "number": 7
       },
       "redact": [

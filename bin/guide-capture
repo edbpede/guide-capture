@@ -85,7 +85,7 @@ Usage:
   guide-capture notifications android
   guide-capture back android
   guide-capture shot android <id>
-  guide-capture annotate <spec.json>
+  guide-capture annotate <spec.json> [retained-run-id]
   guide-capture kill android
   guide-capture seal android
 
@@ -822,11 +822,12 @@ command_shot() {
 }
 
 command_annotate() {
-  [[ "$#" -eq 1 ]] || fail 64 "annotate requires one JSON specification"
+  [[ "$#" -ge 1 && "$#" -le 2 ]] \
+    || fail 64 "annotate requires one JSON specification and an optional retained run ID"
   ensure_runtime_dirs
-  load_state
 
-  local spec="$1" spec_resolved specs_resolved run_id raw_dir result status error
+  local spec="$1" retained_run_id="${2:-}" spec_resolved specs_resolved run_id raw_dir
+  local raw_resolved raw_root_resolved result status error
   [[ -f "$spec" ]] || fail 66 "annotation specification is missing"
   spec_resolved="$(real_path "$spec")"
   specs_resolved="$(real_path "$AUTOMATION_ROOT/specs")"
@@ -835,9 +836,19 @@ command_annotate() {
     *) fail 64 "annotation specification must be a JSON file inside automation/specs" ;;
   esac
 
-  run_id="$(state_value run_id)"
-  [[ "$run_id" =~ ^android-[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || fail 65 "current run ID is invalid"
+  if [[ -n "$retained_run_id" ]]; then
+    run_id="$retained_run_id"
+  else
+    load_state
+    run_id="$(state_value run_id)"
+  fi
+  [[ "$run_id" =~ ^android-[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || fail 65 "Android run ID is invalid"
   raw_dir="$RAW_DIR/$run_id"
+  [[ -d "$raw_dir" && ! -L "$raw_dir" ]] || fail 66 "raw capture run is missing or unsafe"
+  raw_resolved="$(real_path "$raw_dir")"
+  raw_root_resolved="$(real_path "$RAW_DIR")"
+  [[ "$raw_resolved" == "$raw_root_resolved/$run_id" ]] \
+    || fail 65 "raw capture run resolved outside the expected directory"
   /bin/mkdir -p "$REVIEWED_DIR"
   /bin/chmod 700 "$REVIEWED_DIR"
   if result="$($PYTHON "$HELPER" annotate "$spec_resolved" "$raw_dir" "$REVIEWED_DIR" "$MAGICK")"; then

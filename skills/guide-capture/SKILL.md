@@ -127,6 +127,11 @@ platform without owner approval.
    `human_review_required: true`.
 6. Run `guide-capture kill android` before waiting for review.
 
+If review requires annotation or redaction corrections after shutdown, archive the rejected
+reviewed-output directory beneath `runtime/`, update the specification, and run
+`guide-capture annotate <spec.json> <retained-run-id>`. Supply the exact reviewed run ID; never
+select or infer a retained run automatically, and do not reboot solely for offline image changes.
+
 If annotation fails, still run `kill android`. Do not manually reproduce the wrapper's image
 pipeline or overwrite an older reviewed result.
 

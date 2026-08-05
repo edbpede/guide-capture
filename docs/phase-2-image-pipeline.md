@@ -5,8 +5,12 @@ Date: 2026-08-05
 
 ## Contract
 
-`guide-capture annotate <spec.json>` processes the PNG captures for the active Android run. The
-specification must be a JSON file beneath `automation/specs/`. A step with ID `02` consumes
+`guide-capture annotate <spec.json>` processes the PNG captures for the active Android run. After
+the required shutdown and human review, `guide-capture annotate <spec.json> <retained-run-id>` may
+reprocess that exact retained raw-capture directory for annotation or redaction corrections without
+booting an emulator. The command never selects a retained run automatically.
+
+The specification must be a JSON file beneath `automation/specs/`. A step with ID `02` consumes
 `runtime/raw-captures/<run-id>/02.png` and stages its result as
 `reviewed-output/<slug>/02.android.png`.
 
