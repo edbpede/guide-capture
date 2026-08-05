@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "slug": "hvordan-bruger-jeg-os2faktor",
+  "generated_at": "2026-08-05T15:06:21Z",
+  "images": [
+    {
+      "id": "01",
+      "input": "android-20260805T113051Z-69884/01.png",
+      "output": "hvordan-bruger-jeg-os2faktor/01.android.png",
+      "dimensions": "1080x2400",
+      "input_sha256": "a8eac1c019e06ae8db6ae3d908482bf3c2767aaecd79096737ba3cc4c816c974",
+      "output_sha256": "68277e01a674b4e930849a9abf5481d6b5f9004f9cba94ed9883cd046241e031",
+      "redactions": 0,
+      "annotated": true
+    },
+    {
+      "id": "02",
+      "input": "android-20260805T113051Z-69884/02.png",
+      "output": "hvordan-bruger-jeg-os2faktor/02.android.png",
+      "dimensions": "1080x2400",
+      "input_sha256": "daa46302c9607af9ff79edbda048861298f9abe6ba2abff7c97080ffcc399435",
+      "output_sha256": "4856e44d46e67f687de514450e64c9c949e247e6c26aea4ba4f546ebefdea753",
+      "redactions": 0,
+      "annotated": true
+    },
+    {
+      "id": "03",
+      "input": "android-20260805T113051Z-69884/03.png",
+      "output": "hvordan-bruger-jeg-os2faktor/03.android.png",
+      "dimensions": "1080x2400",
+      "input_sha256": "daa46302c9607af9ff79edbda048861298f9abe6ba2abff7c97080ffcc399435",
+      "output_sha256": "778c2c265c18cf184aff07d7c955aac6493b40db0dd26cbbb008bb4bc6eb7527",
+      "redactions": 0,
+      "annotated": true
+    },
+    {
+      "id": "04",
+      "input": "android-20260805T113051Z-69884/04.png",
+      "output": "hvordan-bruger-jeg-os2faktor/04.android.png",
+      "dimensions": "1080x2400",
+      "input_sha256": "bded964314bd8b94eed02f087a278327379098337a957a7180f7e2ac03f329a3",
+      "output_sha256": "1a6590d16e8a11760a58cab4771c5e53e9b303c510d79910ad128d646a3b48b1",
+      "redactions": 0,
+      "annotated": true
+    },
+    {
+      "id": "05",
+      "input": "android-20260805T113051Z-69884/05.png",
+      "output": "hvordan-bruger-jeg-os2faktor/05.android.png",
+      "dimensions": "1080x2400",
+      "input_sha256": "9b298b36991a1299cf8872f73ffd6c4547588bcb7c612f9fc668e81db9ffa18a",
+      "output_sha256": "21318c60eb41edf74dbd34f7383435fc7d61067f0d14b9a8fdab2f7c52974ec3",
+      "redactions": 1,
+      "annotated": true
+    },
+    {
+      "id": "06",
+      "input": "android-20260805T113051Z-69884/06.png",
+      "output": "hvordan-bruger-jeg-os2faktor/06.android.png",
+      "dimensions": "1080x2400",
+      "input_sha256": "3fe5bcd948e18ca2b3b8953c3916b273cc352810ca8e787541f228d53d017b42",
+      "output_sha256": "2368076180196055746f6120c0f74db1193f10337d45bd69aa18a7bfb52d4523",
+      "redactions": 1,
+      "annotated": true
+    },
+    {
+      "id": "07",
+      "input": "android-20260805T113051Z-69884/07.png",
+      "output": "hvordan-bruger-jeg-os2faktor/07.android.png",
+      "dimensions": "1080x2400",
+      "input_sha256": "5498e0f800e7a6defceb8c9a2c70a58e2f4d060bf1d806d418fb90c0268268bf",
+      "output_sha256": "98c8a83656f84f648d4ec26c25e7fc680a6a39c8f5e306e461a3d1d734573b55",
+      "redactions": 1,
+      "annotated": true
+    }
+  ],
+  "human_review_required": true
+}
