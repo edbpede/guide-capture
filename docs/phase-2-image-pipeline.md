@@ -60,6 +60,8 @@ Rules:
 - `find` and `expect_after`, when present, use one exact semantic selector.
 - `annotate` is optional. It draws one numbered highlight and may draw an arrow from
   `arrow_from` to the center of the highlighted region.
+- Highlight bounds must closely fit the actual visible or clickable target, allowing only a small
+  stroke-safe margin and excluding unrelated layout or empty surrounding space.
 - Right and bottom bounds are exclusive. All coordinates must fit the source image.
 - Unsupported or misspelled keys are errors.
 - A system annotation font is verified by `doctor`.

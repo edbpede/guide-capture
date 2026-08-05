@@ -121,7 +121,9 @@ platform without owner approval.
    notification contents, tokens, and student information.
 2. Record every required opaque redaction region and reason in the specification. Keep `redact: []`
    only after an explicit inspection finds nothing sensitive.
-3. Record the numbered highlight and optional arrow bounds in `annotate` where needed.
+3. Record the numbered highlight and optional arrow bounds in `annotate` where needed. Fit each
+   highlight tightly to the actual visible or clickable target with only a small stroke-safe margin;
+   exclude unrelated layout and empty surrounding space.
 4. Run `guide-capture annotate <spec.json>` while the run is active.
 5. Confirm the JSON report contains an input/output hash for every expected step and
    `human_review_required: true`.
