@@ -1,7 +1,18 @@
+# Everything private lives in exactly one place: the workspace .env, the multi-gigabyte Android
+# runtime tree, and reviewed output awaiting curation. Nothing under private/ is ever published.
+private/
+
+# Local tooling and editor state
+.omc/
+.DS_Store
 *.pyc
 __pycache__/
 
-# Credential-bearing and generated Android state must never enter this repository.
+# Defence in depth. private/ already covers these, but a stray copy anywhere else in the tree
+# must never become committable either.
+.env
+.env.*
+!.env.example
 *.age
 *.avd/
 *.keystore

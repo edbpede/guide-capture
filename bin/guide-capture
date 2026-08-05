@@ -10,19 +10,23 @@ PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-AUTOMATION_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
-WORKSPACE_ROOT="$(cd -- "$AUTOMATION_ROOT/.." && pwd -P)"
-RUNTIME_ROOT="$WORKSPACE_ROOT/runtime"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+
+# Every credential-bearing, generated, or otherwise unpublishable artefact lives under one
+# gitignored directory. Override GUIDE_CAPTURE_PRIVATE to relocate it off the repository.
+PRIVATE_ROOT="${GUIDE_CAPTURE_PRIVATE:-$REPO_ROOT/private}"
+ENV_FILE="$PRIVATE_ROOT/.env"
+RUNTIME_ROOT="$PRIVATE_ROOT/runtime"
 RUNS_DIR="$RUNTIME_ROOT/runs"
 RAW_DIR="$RUNTIME_ROOT/raw-captures"
 LOGS_DIR="$RUNTIME_ROOT/logs"
 SEALED_DIR="$RUNTIME_ROOT/sealed-goldens"
 EMULATOR_HOME="$RUNTIME_ROOT/emulator-home"
-REVIEWED_DIR="$WORKSPACE_ROOT/reviewed-output"
+REVIEWED_DIR="$PRIVATE_ROOT/reviewed-output"
 STATE_FILE="$RUNTIME_ROOT/current-run.json"
-MANIFEST="$AUTOMATION_ROOT/profiles/android-phone.json"
-HELPER="$AUTOMATION_ROOT/lib/guide_capture.py"
-WEB_TAP_HELPER="$AUTOMATION_ROOT/lib/web_tap.mjs"
+MANIFEST="$REPO_ROOT/profiles/android-phone.json"
+HELPER="$REPO_ROOT/lib/guide_capture.py"
+WEB_TAP_HELPER="$REPO_ROOT/lib/web_tap.mjs"
 SEALED_GOLDEN="$SEALED_DIR/android-phone.tar.zst.age"
 
 ANDROID_HOME="/opt/homebrew/share/android-commandlinetools"
@@ -106,7 +110,7 @@ require_android() {
 
 ensure_runtime_dirs() {
   /bin/mkdir -p "$RUNS_DIR" "$RAW_DIR" "$LOGS_DIR" "$SEALED_DIR" "$EMULATOR_HOME"
-  /bin/chmod 700 "$RUNTIME_ROOT" "$RUNS_DIR" "$RAW_DIR" "$LOGS_DIR" "$SEALED_DIR" "$EMULATOR_HOME"
+  /bin/chmod 700 "$PRIVATE_ROOT" "$RUNTIME_ROOT" "$RUNS_DIR" "$RAW_DIR" "$LOGS_DIR" "$SEALED_DIR" "$EMULATOR_HOME"
 }
 
 real_path() {
@@ -635,7 +639,7 @@ command_type_public() {
   local selector="$1" public_text="$2" text_length before after match_json match_status count reason
   local selector_key field_class field_text is_clickable is_focusable is_password x y after_match
 
-  if ! text_length="$($PYTHON -c 'import sys; sys.path.insert(0, sys.argv[1]); from guide_capture import validate_public_text; print(validate_public_text(sys.argv[2]))' "$AUTOMATION_ROOT/lib" "$public_text" 2>/dev/null)"; then
+  if ! text_length="$($PYTHON -c 'import sys; sys.path.insert(0, sys.argv[1]); from guide_capture import validate_public_text; print(validate_public_text(sys.argv[2]))' "$REPO_ROOT/lib" "$public_text" 2>/dev/null)"; then
     fail 64 "public text must be 1-64 ASCII letters, digits, dots, underscores, or hyphens"
   fi
 
@@ -726,7 +730,7 @@ command_login_ishoj() {
   require_no_extra_args "$@"
   require_target
 
-  local env_file="$WORKSPACE_ROOT/.env" before sensitive login_match x y deadline match_status
+  local env_file="$ENV_FILE" before sensitive login_match x y deadline match_status
   before="$RUN_DIR/ishoj-login-before"
   sensitive="$RUN_DIR/ishoj-login-sensitive"
   trap '/bin/rm -f -- "$before.xml" "$before.json" "$sensitive.xml" "$sensitive.json"' EXIT INT TERM
@@ -769,7 +773,7 @@ command_unlock_os2faktor() {
   require_no_extra_args "$@"
   require_target
 
-  local env_file="$WORKSPACE_ROOT/.env" before sensitive deadline match_status
+  local env_file="$ENV_FILE" before sensitive deadline match_status
   before="$RUN_DIR/os2faktor-pin-before"
   sensitive="$RUN_DIR/os2faktor-pin-sensitive"
   trap '/bin/rm -f -- "$before.xml" "$before.json" "$sensitive.xml" "$sensitive.json"' EXIT INT TERM
@@ -830,7 +834,7 @@ command_annotate() {
   local raw_resolved raw_root_resolved result status error
   [[ -f "$spec" ]] || fail 66 "annotation specification is missing"
   spec_resolved="$(real_path "$spec")"
-  specs_resolved="$(real_path "$AUTOMATION_ROOT/specs")"
+  specs_resolved="$(real_path "$REPO_ROOT/specs")"
   case "$spec_resolved" in
     "$specs_resolved"/*.json) ;;
     *) fail 64 "annotation specification must be a JSON file inside automation/specs" ;;

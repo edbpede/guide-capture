@@ -11,8 +11,12 @@ cd "$REPO_ROOT"
 rejected=0
 while IFS= read -r -d '' path; do
   case "$path" in
+    # The placeholder template carries no values and must stay committable. This arm has to
+    # precede the .env.* rejection below, which would otherwise match it.
+    .env.example | */.env.example)
+      ;;
     *.avd/* | *.age | *.ini | *.keystore | *.jks | *.p12 | \
-      runtime/* | raw-captures/* | current-run.json | \
+      private/* | runtime/* | raw-captures/* | current-run.json | \
       .env | .env.* | */.env | */.env.* | \
       auth-state* | */auth-state*)
       printf 'Refusing sensitive staged path: %s\n' "$path" >&2
