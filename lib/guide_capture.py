@@ -534,6 +534,19 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _report_path(path: Path, anchor: Path) -> str:
+    """Render a path relative to an anchor.
+
+    Annotation reports ship next to reviewed screenshots and may be published, so they must
+    never carry absolute filesystem paths, which would leak the operator's home directory and
+    account name. Falls back to the bare filename when the path lies outside the anchor.
+    """
+    try:
+        return path.resolve().relative_to(anchor.resolve()).as_posix()
+    except ValueError:
+        return path.name
+
+
 def process_annotation_spec(
     spec_path: Path, raw_dir: Path, reviewed_root: Path, magick: Path
 ) -> dict[str, object]:
@@ -580,8 +593,8 @@ def process_annotation_spec(
             report_images.append(
                 {
                     "id": step["id"],
-                    "input": str(source),
-                    "output": str(destination),
+                    "input": _report_path(source, raw_root.parent),
+                    "output": _report_path(destination, reviewed_root),
                     "dimensions": f"{width}x{height}",
                     "input_sha256": _sha256(source),
                     "output_sha256": _sha256(staged),

@@ -321,8 +321,28 @@ class AnnotationPipelineTests(unittest.TestCase):
         ).stdout
         self.assertEqual(comment, "")
         self.assertNotEqual(result["images"][0]["input_sha256"], result["images"][0]["output_sha256"])
-        self.assertEqual(result["images"][0]["input"], str(source.resolve()))
+        self.assertEqual(result["images"][0]["input"], f"{self.raw_dir.name}/{source.name}")
+        self.assertEqual(result["images"][0]["output"], f"pilot-guide/{output.name}")
         self.assertTrue(result["human_review_required"])
+
+    def test_report_records_relative_paths_only(self) -> None:
+        # The report ships beside published screenshots, so an absolute path would leak the
+        # operator's home directory and account name into the guides repository.
+        self.make_source()
+        self.write_spec(self.valid_spec())
+
+        process_annotation_spec(self.spec_path, self.raw_dir, self.reviewed_root, self.magick)
+
+        report_text = (self.reviewed_root / "pilot-guide" / "annotation-report.json").read_text(
+            encoding="utf-8"
+        )
+        for path_field in ('"input":', '"output":'):
+            self.assertIn(path_field, report_text)
+        self.assertNotIn(str(self.temporary_path), report_text)
+        self.assertNotIn(str(Path.home()), report_text)
+        for record in json.loads(report_text)["images"]:
+            self.assertFalse(Path(record["input"]).is_absolute())
+            self.assertFalse(Path(record["output"]).is_absolute())
 
     def test_pipeline_refuses_to_overwrite_reviewed_output(self) -> None:
         self.make_source()
