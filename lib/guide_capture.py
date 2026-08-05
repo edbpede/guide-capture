@@ -15,6 +15,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 BOUNDS_RE = re.compile(r"^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$")
@@ -22,6 +23,9 @@ VERSION_CODE_RE = re.compile(r"\bversionCode=(\d+)\b")
 SELECTOR_KEYS = {"text", "content_desc", "resource_id"}
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 STEP_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+PACKAGE_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
+FOREGROUND_MARKERS = ("mResumedActivity", "topResumedActivity")
+FOREGROUND_PACKAGE_RE = re.compile(r"(?:\bu\d+\s+)?([A-Za-z][A-Za-z0-9_.]*)/[A-Za-z0-9_.$]+")
 COVER_COLOR = "#20242B"
 HIGHLIGHT_COLOR = "#F5C518"
 BADGE_COLOR = "#C62828"
@@ -99,6 +103,33 @@ def parse_package_version_code(output: str) -> str:
     if not match:
         raise ValueError("package output does not contain versionCode")
     return match.group(1)
+
+
+def parse_open_target(raw: str) -> dict[str, str]:
+    if not raw or any(character.isspace() for character in raw):
+        raise ValueError("open target must be one URL or package name without whitespace")
+    if raw.startswith("https://"):
+        parsed = urlsplit(raw)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise ValueError("URL target must be an absolute HTTPS URL")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("URL target must not contain credentials")
+        return {"type": "url", "value": raw}
+    if "://" in raw:
+        raise ValueError("URL target must use HTTPS")
+    if not PACKAGE_RE.fullmatch(raw):
+        raise ValueError("package target is not a valid lowercase Android package name")
+    return {"type": "package", "value": raw}
+
+
+def parse_foreground_package(output: str) -> str:
+    for line in output.splitlines():
+        if not any(marker in line for marker in FOREGROUND_MARKERS):
+            continue
+        match = FOREGROUND_PACKAGE_RE.search(line)
+        if match:
+            return match.group(1)
+    raise ValueError("foreground package was not reported")
 
 
 def _require_object(value: object, location: str) -> dict[str, object]:
@@ -518,6 +549,23 @@ def command_package_version_code(_args: argparse.Namespace) -> int:
     return 0
 
 
+def command_open_target(args: argparse.Namespace) -> int:
+    try:
+        print(json.dumps(parse_open_target(args.target)))
+    except ValueError as error:
+        print(json.dumps({"ok": False, "error": str(error)}))
+        return 64
+    return 0
+
+
+def command_foreground_package(_args: argparse.Namespace) -> int:
+    try:
+        print(parse_foreground_package(sys.stdin.read()))
+    except ValueError:
+        return 2
+    return 0
+
+
 def update_key_value(path: Path, replacements: dict[str, str]) -> None:
     if not path.exists():
         return
@@ -596,6 +644,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     version_code = subparsers.add_parser("package-version-code")
     version_code.set_defaults(handler=command_package_version_code)
+
+    open_target = subparsers.add_parser("open-target")
+    open_target.add_argument("target")
+    open_target.set_defaults(handler=command_open_target)
+
+    foreground_package = subparsers.add_parser("foreground-package")
+    foreground_package.set_defaults(handler=command_foreground_package)
 
     rewrite = subparsers.add_parser("rewrite-avd")
     rewrite.add_argument("avd_dir")

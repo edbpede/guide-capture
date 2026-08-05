@@ -1,0 +1,4 @@
+interface:
+  display_name: "Guide Capture"
+  short_description: "Capture and redact Android guide screenshots"
+  default_prompt: "Use $guide-capture to capture and prepare the Android screenshots for this guide."

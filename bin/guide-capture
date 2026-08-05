@@ -72,6 +72,7 @@ usage() {
 Usage:
   guide-capture doctor
   guide-capture boot android
+  guide-capture open android <https-url-or-package>
   guide-capture dump android
   guide-capture wait android '<selector-json>'
   guide-capture tap android '<selector-json>'
@@ -445,6 +446,55 @@ command_dump() {
     '{ok:true, command:"dump", platform:"android", xml:$xml, nodes:$nodes, count:$count}'
 }
 
+command_open() {
+  require_android "${1:-}"
+  shift
+  [[ "$#" -eq 1 ]] || fail 64 "open requires one HTTPS URL or Android package name"
+  local target="$1" parsed kind value expected_package package_path deadline foreground="" evidence_base
+  if ! parsed="$($PYTHON "$HELPER" open-target "$target")"; then
+    fail 64 "$(printf '%s' "$parsed" | "$JQ" -r '.error // "open target is invalid"')"
+  fi
+  kind="$(printf '%s' "$parsed" | "$JQ" -r '.type')"
+  value="$(printf '%s' "$parsed" | "$JQ" -r '.value')"
+  require_target
+
+  if [[ "$kind" == url ]]; then
+    expected_package="$($JQ -er '.packages.chrome.id' "$MANIFEST")"
+  else
+    expected_package="$value"
+  fi
+  package_path="$(adb_target shell pm path "$expected_package" | /usr/bin/tr -d '\r')"
+  [[ "$package_path" == package:* ]] || fail 66 "requested Android package is not installed"
+
+  if [[ "$kind" == url ]]; then
+    adb_target shell am start -W -a android.intent.action.VIEW -d "$value" -p "$expected_package" \
+      >/dev/null || fail 69 "Chrome could not open the requested HTTPS URL"
+  else
+    adb_target shell monkey -p "$value" -c android.intent.category.LAUNCHER 1 \
+      >/dev/null 2>&1 || fail 69 "Android package could not be launched"
+  fi
+
+  deadline=$(( $(/bin/date +%s) + 15 ))
+  while (( $(/bin/date +%s) < deadline )); do
+    foreground="$(adb_target shell dumpsys activity activities \
+      | "$PYTHON" "$HELPER" foreground-package 2>/dev/null || true)"
+    [[ "$foreground" == "$expected_package" ]] && break
+    /bin/sleep 1
+  done
+  if [[ "$foreground" != "$expected_package" ]]; then
+    diagnostic_shot open-failure
+    fail 69 "opened target did not become foreground; screenshot: $DIAGNOSTIC_PATH"
+  fi
+
+  evidence_base="$RUN_LOG_DIR/open-after-$(timestamp_id)"
+  capture_dump "$evidence_base"
+  human "Opened and verified the requested $kind target."
+  log_event success
+  "$JQ" -nc --arg type "$kind" --arg package "$foreground" --arg xml "$evidence_base.xml" \
+    --arg nodes "$evidence_base.json" \
+    '{ok:true, command:"open", platform:"android", target_type:$type, foreground_package:$package, evidence:{xml:$xml,nodes:$nodes}}'
+}
+
 selector_failure() {
   local reason="$1" count="$2" xml="$3" nodes="$4"
   diagnostic_shot selector-failure
@@ -667,6 +717,10 @@ case "$COMMAND_NAME" in
   boot)
     shift
     command_boot "$@"
+    ;;
+  open)
+    shift
+    command_open "$@"
     ;;
   dump)
     shift

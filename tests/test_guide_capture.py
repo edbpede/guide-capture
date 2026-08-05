@@ -16,6 +16,8 @@ from guide_capture import (  # noqa: E402
     AnnotationSpecError,
     find_matches,
     normalize_nodes,
+    parse_foreground_package,
+    parse_open_target,
     parse_package_version_code,
     parse_selector,
     process_annotation_spec,
@@ -74,6 +76,33 @@ class GuideCaptureTests(unittest.TestCase):
     def test_package_version_code_allows_android_indentation(self) -> None:
         output = "    versionCode=30201 minSdk=23 targetSdk=35\n"
         self.assertEqual(parse_package_version_code(output), "30201")
+
+    def test_open_target_accepts_https_and_lowercase_package(self) -> None:
+        self.assertEqual(
+            parse_open_target("https://aula.dk/"),
+            {"type": "url", "value": "https://aula.dk/"},
+        )
+        self.assertEqual(
+            parse_open_target("dk.digitalidentity.os2faktor"),
+            {"type": "package", "value": "dk.digitalidentity.os2faktor"},
+        )
+
+    def test_open_target_rejects_insecure_or_credential_bearing_url(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must use HTTPS"):
+            parse_open_target("http://aula.dk/")
+        with self.assertRaisesRegex(ValueError, "must not contain credentials"):
+            parse_open_target("https://user:secret@aula.dk/")
+
+    def test_open_target_rejects_shell_or_package_injection(self) -> None:
+        with self.assertRaisesRegex(ValueError, "package target"):
+            parse_open_target("dk.digitalidentity.os2faktor;id")
+
+    def test_foreground_package_parses_android_activity_state(self) -> None:
+        output = (
+            "mResumedActivity: ActivityRecord{123 u0 "
+            "com.android.chrome/org.chromium.chrome.browser.ChromeTabbedActivity t42}\n"
+        )
+        self.assertEqual(parse_foreground_package(output), "com.android.chrome")
 
 
 class AnnotationPipelineTests(unittest.TestCase):
