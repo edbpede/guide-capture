@@ -24,7 +24,9 @@ or repeat secret values from `.env`.
 
 - Call `guide-capture` only. Never call raw `adb`, `emulator`, `age`, or ImageMagick commands.
 - Never pass passwords, PINs, one-time codes, enrollment secrets, or token-bearing URLs as arguments.
-- Never type a secret for the user. Pause and ask the device owner to enter it directly.
+- Never type a secret with generic UI or shell commands. The sole project-specific exception is
+  `login-ishoj android`, after the owner explicitly authorizes using `I_ACC_EMAIL` and `I_ACC_PASS`
+  from the protected workspace `.env` for the Ishøj IdP.
 - Use exact `text`, `content_desc`, or `resource_id` selectors from fresh UI dumps.
 - Never invent device coordinates. Stop on zero or multiple selector matches.
 - Never bypass secure-window, integrity, attestation, or emulator-detection controls.
@@ -87,7 +89,10 @@ not use it speculatively for webpage navigation.
 For a capture-only step without `find`, dump and verify the intended state, then take the shot. Do
 not manufacture an action.
 
-If a login, PIN, MitID, OS2faktor, or enrollment secret is required:
+For the explicitly authorized Ishøj IdP account login, run `login-ishoj android` only on the
+verified blank Ishøj form. Confirm that it reports `sensitive_evidence_retained:false`.
+
+If any other login, PIN, MitID, OS2faktor, or enrollment secret is required:
 
 1. Stop before entering it.
 2. Tell the owner which visible emulator field or button needs attention.

@@ -9,6 +9,7 @@ import json
 import math
 import os
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -109,6 +110,67 @@ def validate_public_text(raw: str) -> int:
             "public text must be 1-64 ASCII letters, digits, dots, underscores, or hyphens"
         )
     return len(raw)
+
+
+def read_ishoj_credentials(env_path: Path) -> tuple[str, str]:
+    if not env_path.is_file() or env_path.stat().st_mode & 0o777 != 0o600:
+        raise ValueError("Ishøj credential file is missing or is not mode 600")
+    values: dict[str, str] = {}
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        if key in {"I_ACC_EMAIL", "I_ACC_PASS"}:
+            if key in values:
+                raise ValueError("Ishøj credential file contains a duplicate required key")
+            values[key] = value
+    if set(values) != {"I_ACC_EMAIL", "I_ACC_PASS"}:
+        raise ValueError("Ishøj credential file is missing a required key")
+    if any(not re.fullmatch(r"[^%\s\x00-\x1f\x7f-\xff]+", value) for value in values.values()):
+        raise ValueError("Ishøj credentials contain characters unsupported by Android input")
+    return values["I_ACC_EMAIL"], values["I_ACC_PASS"]
+
+
+def build_ishoj_input_script(nodes: list[dict[str, object]], email: str, password: str) -> str:
+    expected = {
+        "username": False,
+        "password": True,
+    }
+    centers: dict[str, dict[str, int]] = {}
+    for resource_id, is_password in expected.items():
+        matches = [node for node in nodes if node["enabled"] and node["resource_id"] == resource_id]
+        if len(matches) != 1:
+            raise ValueError("Ishøj login field is missing or ambiguous")
+        node = matches[0]
+        if (
+            node["class"] != "android.widget.EditText"
+            or not node["clickable"]
+            or not node["focusable"]
+            or node["password"] is not is_password
+            or node["text"]
+        ):
+            raise ValueError("Ishøj login field state is unsafe")
+        centers[resource_id] = node["center"]  # type: ignore[assignment]
+
+    username = centers["username"]
+    password_field = centers["password"]
+    return "\n".join(
+        (
+            f"input tap {username['x']} {username['y']}",
+            "sleep 1",
+            f"input text {shlex.quote(email)}",
+            "sleep 1",
+            f"input tap {password_field['x']} {password_field['y']}",
+            "sleep 1",
+            f"input text {shlex.quote(password)}",
+            "sleep 1",
+        )
+    ) + "\n"
 
 
 def parse_package_version_code(output: str) -> str:
@@ -571,6 +633,18 @@ def command_open_target(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_ishoj_input_script(args: argparse.Namespace) -> int:
+    try:
+        nodes = json.loads(Path(args.nodes).read_text(encoding="utf-8"))
+        email, password = read_ishoj_credentials(Path(args.env))
+        script = build_ishoj_input_script(nodes, email, password)
+    except (ValueError, json.JSONDecodeError, OSError, KeyError, TypeError):
+        print("Ishøj credential preparation failed", file=sys.stderr)
+        return 65
+    sys.stdout.write(script)
+    return 0
+
+
 def command_foreground_package(_args: argparse.Namespace) -> int:
     try:
         print(parse_foreground_package(sys.stdin.read()))
@@ -661,6 +735,11 @@ def build_parser() -> argparse.ArgumentParser:
     open_target = subparsers.add_parser("open-target")
     open_target.add_argument("target")
     open_target.set_defaults(handler=command_open_target)
+
+    ishoj_input = subparsers.add_parser("ishoj-input-script")
+    ishoj_input.add_argument("nodes")
+    ishoj_input.add_argument("env")
+    ishoj_input.set_defaults(handler=command_ishoj_input_script)
 
     foreground_package = subparsers.add_parser("foreground-package")
     foreground_package.set_defaults(handler=command_foreground_package)

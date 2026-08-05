@@ -77,6 +77,7 @@ Usage:
   guide-capture wait android '<selector-json>'
   guide-capture tap android '<selector-json>'
   guide-capture type-public android '<resource-id-selector-json>' <public-ascii-token>
+  guide-capture login-ishoj android
   guide-capture back android
   guide-capture shot android <id>
   guide-capture annotate <spec.json>
@@ -657,6 +658,49 @@ command_back() {
     '{ok:true, command:"back", platform:"android", before:{xml:$before_xml,nodes:$before_nodes}, after:{xml:$after_xml,nodes:$after_nodes}}'
 }
 
+command_login_ishoj() {
+  require_android "${1:-}"
+  shift
+  require_no_extra_args "$@"
+  require_target
+
+  local env_file="$WORKSPACE_ROOT/.env" before sensitive login_match x y deadline match_status
+  before="$RUN_DIR/ishoj-login-before"
+  sensitive="$RUN_DIR/ishoj-login-sensitive"
+  trap '/bin/rm -f -- "$before.xml" "$before.json" "$sensitive.xml" "$sensitive.json"' EXIT INT TERM
+
+  capture_dump "$before"
+  if ! "$PYTHON" "$HELPER" ishoj-input-script "$before.json" "$env_file" | adb_target shell >/dev/null; then
+    fail 65 "Ishøj credentials could not be entered safely"
+  fi
+
+  capture_dump "$sensitive"
+  if ! login_match="$($PYTHON "$HELPER" match "$sensitive.json" '{"text":"Login"}')"; then
+    fail 69 "the exact Ishøj Login button was unavailable after credential entry"
+  fi
+  x="$(printf '%s' "$login_match" | "$JQ" -r '.matches[0].center.x')"
+  y="$(printf '%s' "$login_match" | "$JQ" -r '.matches[0].center.y')"
+  adb_target shell input tap "$x" "$y"
+
+  deadline=$(( $(/bin/date +%s) + 30 ))
+  while (( $(/bin/date +%s) < deadline )); do
+    capture_dump "$sensitive"
+    if "$PYTHON" "$HELPER" match "$sensitive.json" '{"resource_id":"username"}' >/dev/null; then
+      /bin/sleep 1
+    else
+      match_status=$?
+      [[ "$match_status" -eq 2 ]] || fail 69 "the Ishøj login form could not be verified after submission"
+      /bin/rm -f -- "$before.xml" "$before.json" "$sensitive.xml" "$sensitive.json"
+      trap - EXIT INT TERM
+      human "Submitted the locally stored Ishøj credentials and left the login form."
+      log_event success
+      "$JQ" -nc '{ok:true, command:"login-ishoj", platform:"android", login_form:false, sensitive_evidence_retained:false}'
+      return 0
+    fi
+  done
+  fail 69 "the Ishøj login form remained after submission"
+}
+
 command_shot() {
   require_android "${1:-}"
   shift
@@ -816,6 +860,10 @@ case "$COMMAND_NAME" in
   type-public)
     shift
     command_type_public "$@"
+    ;;
+  login-ishoj)
+    shift
+    command_login_ishoj "$@"
     ;;
   back)
     shift

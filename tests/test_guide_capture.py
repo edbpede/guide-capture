@@ -15,12 +15,14 @@ from guide_capture import (  # noqa: E402
     AnnotationProcessingError,
     AnnotationSpecError,
     find_matches,
+    build_ishoj_input_script,
     normalize_nodes,
     parse_foreground_package,
     parse_open_target,
     parse_package_version_code,
     parse_selector,
     process_annotation_spec,
+    read_ishoj_credentials,
     validate_public_text,
     validate_annotation_spec,
 )
@@ -85,6 +87,54 @@ class GuideCaptureTests(unittest.TestCase):
         for value in ("Ishøj", "Ish kommune", "Ish;id", "$(id)"):
             with self.subTest(value=value), self.assertRaises(ValueError):
                 validate_public_text(value)
+
+    def test_ishoj_credentials_require_private_file_and_supported_values(self) -> None:
+        env_path = self.temporary_path / ".env"
+        env_path.write_text(
+            "I_ACC_EMAIL=user@example.invalid\nI_ACC_PASS=Safe!Pass123\n",
+            encoding="utf-8",
+        )
+        env_path.chmod(0o600)
+        self.assertEqual(
+            read_ishoj_credentials(env_path),
+            ("user@example.invalid", "Safe!Pass123"),
+        )
+        env_path.chmod(0o644)
+        with self.assertRaisesRegex(ValueError, "mode 600"):
+            read_ishoj_credentials(env_path)
+
+    def test_ishoj_input_script_requires_exact_empty_password_metadata(self) -> None:
+        nodes = [
+            {
+                "text": "",
+                "resource_id": "username",
+                "class": "android.widget.EditText",
+                "clickable": True,
+                "enabled": True,
+                "focusable": True,
+                "password": False,
+                "center": {"x": 100, "y": 200},
+            },
+            {
+                "text": "",
+                "resource_id": "password",
+                "class": "android.widget.EditText",
+                "clickable": True,
+                "enabled": True,
+                "focusable": True,
+                "password": True,
+                "center": {"x": 100, "y": 300},
+            },
+        ]
+        script = build_ishoj_input_script(nodes, "user@example.invalid", "Safe!Pass123")
+        self.assertIn("input tap 100 200", script)
+        self.assertIn("input text user@example.invalid", script)
+        self.assertIn("input tap 100 300", script)
+        self.assertIn("input text 'Safe!Pass123'", script)
+
+        nodes[1]["password"] = False
+        with self.assertRaisesRegex(ValueError, "unsafe"):
+            build_ishoj_input_script(nodes, "user@example.invalid", "Safe!Pass123")
 
     def test_package_version_code_allows_android_indentation(self) -> None:
         output = "    versionCode=30201 minSdk=23 targetSdk=35\n"
