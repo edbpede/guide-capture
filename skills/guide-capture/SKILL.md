@@ -119,15 +119,17 @@ platform without owner approval.
 
 1. Inspect every raw screenshot locally for names, usernames, email addresses, avatars, device IDs,
    notification contents, tokens, and student information.
-2. Record every required opaque redaction region and reason in the specification. Keep `redact: []`
+2. Read `references/annotation-redaction.md` and apply its separate privacy-fit and target-fit
+   checks at full image resolution.
+3. Record every required opaque redaction region and reason in the specification. Keep `redact: []`
    only after an explicit inspection finds nothing sensitive.
-3. Record the numbered highlight and optional arrow bounds in `annotate` where needed. Fit each
+4. Record the numbered highlight and optional arrow bounds in `annotate` where needed. Fit each
    highlight tightly to the actual visible or clickable target with only a small stroke-safe margin;
    exclude unrelated layout and empty surrounding space.
-4. Run `guide-capture annotate <spec.json>` while the run is active.
-5. Confirm the JSON report contains an input/output hash for every expected step and
+5. Run `guide-capture annotate <spec.json>` while the run is active.
+6. Confirm the JSON report contains an input/output hash for every expected step and
    `human_review_required: true`.
-6. Run `guide-capture kill android` before waiting for review.
+7. Run `guide-capture kill android` before waiting for review.
 
 If review requires annotation or redaction corrections after shutdown, archive the rejected
 reviewed-output directory beneath `runtime/`, update the specification, and run
@@ -140,8 +142,9 @@ pipeline or overwrite an older reviewed result.
 ### 5. Review and publish
 
 1. Open every staged Android PNG and inspect it at full resolution.
-2. Confirm Danish UI text is legible, redactions fully cover sensitive content, annotations point to
-   the correct control, the status bar is consistent, and any prose difference is recorded.
+2. Run the independent privacy-fit and target-fit review passes in
+   `references/annotation-redaction.md`. Confirm Danish UI text is legible, the status bar is
+   consistent, and any prose difference is recorded.
 3. Show the staged images to the owner and request explicit approval.
 4. Only after approval, copy the PNGs into the matching directory under `guides/public/screens/`.
 5. Never copy `annotation-report.json`, raw PNGs, XML, UI-node JSON, emulator logs, or run state.
@@ -155,7 +158,8 @@ work. Publishing and frontend integration remain separate reviewable changes.
 
 - `doctor` passed before boot.
 - The start target and every action were semantically verified.
-- Secrets were entered only by the owner and never appeared in arguments or output.
+- Secrets were entered only by the owner or a dedicated owner-authorized protected command and
+  never appeared in arguments or output.
 - Every requested raw capture has a corresponding hash-tracked reviewed PNG.
 - Every redaction decision is explicit.
 - The emulator and dedicated ADB server were stopped and the plaintext run was destroyed.

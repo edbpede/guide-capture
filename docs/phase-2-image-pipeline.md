@@ -57,6 +57,9 @@ Rules:
 - `steps` is non-empty and every step ID is unique and filename-safe.
 - Every step has a `redact` array, including `[]` when review finds nothing sensitive.
 - Every redaction has `[left, top, right, bottom]` bounds and a written reason.
+- Redaction bounds must extend beyond every sensitive pixel with a safety margin. Privacy coverage
+  takes precedence over visual tightness; use the whole row or content region when text wraps or
+  nearby metadata could leak.
 - `find` and `expect_after`, when present, use one exact semantic selector.
 - `annotate` is optional. It draws one numbered highlight and may draw an arrow from
   `arrow_from` to the center of the highlighted region.
@@ -65,6 +68,9 @@ Rules:
 - Right and bottom bounds are exclusive. All coordinates must fit the source image.
 - Unsupported or misspelled keys are errors.
 - A system annotation font is verified by `doctor`.
+
+Apply the full privacy-fit and target-fit checklist in
+`skills/guide-capture/references/annotation-redaction.md` before approval.
 
 ## Processing order and safety
 
