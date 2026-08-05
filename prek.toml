@@ -35,4 +35,5 @@ hooks = [
   { id = "sensitive-staged-paths", name = "reject sensitive staged paths", entry = "bin/check-sensitive-files", language = "system", always_run = true, pass_filenames = false },
   { id = "shellcheck", name = "shellcheck", entry = "shellcheck bin/guide-capture bin/check-sensitive-files", language = "system", always_run = true, pass_filenames = false },
   { id = "python-tests", name = "Python unit tests", entry = "python3 -m unittest discover -s tests -v", language = "system", always_run = true, pass_filenames = false },
+  { id = "node-check-web-tap", name = "Node syntax check", entry = "node --check lib/web_tap.mjs", language = "system", always_run = true, pass_filenames = false },
 ]

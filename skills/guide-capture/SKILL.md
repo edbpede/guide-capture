@@ -26,8 +26,12 @@ or repeat secret values from `.env`.
 - Never pass passwords, PINs, one-time codes, enrollment secrets, or token-bearing URLs as arguments.
 - Never type a secret with generic UI or shell commands. The sole project-specific exception is
   `login-ishoj android`, after the owner explicitly authorizes using `I_ACC_EMAIL` and `I_ACC_PASS`
-  from the protected workspace `.env` for the Ishøj IdP.
+  from the protected workspace `.env` for the Ishøj IdP, plus `unlock-os2faktor android` for the
+  owner-authorized `OS2FAKTOR_PIN` in the same protected file.
 - Use exact `text`, `content_desc`, or `resource_id` selectors from fresh UI dumps.
+- If Chrome renders an approved Aula or authentication page but UIAutomator exposes only a WebView,
+  `web-tap android '<exact-visible-text>'` may click one exact visible DOM control. It searches only
+  the fixed Aula, UniLogin broker, and Ishøj IdP host allowlist and stops on zero or multiple matches.
 - Never invent device coordinates. Stop on zero or multiple selector matches.
 - Never bypass secure-window, integrity, attestation, or emulator-detection controls.
 - Never publish raw captures. Copy only owner-approved, redacted output into the guides repository.
@@ -85,6 +89,9 @@ token, even if it would pass the character restrictions.
 Use `back android` only after visual or hierarchy evidence confirms a transient Android or keyboard
 overlay that should be dismissed. It sends Back exactly once and saves before/after evidence; do
 not use it speculatively for webpage navigation.
+
+Use `notifications android` when a verified OS2faktor request is pending and the application has no
+launcher activity. Inspect the private hierarchy, then tap only one exact OS2faktor notification.
 
 For a capture-only step without `find`, dump and verify the intended state, then take the shot. Do
 not manufacture an action.

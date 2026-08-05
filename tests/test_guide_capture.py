@@ -16,6 +16,7 @@ from guide_capture import (  # noqa: E402
     AnnotationSpecError,
     find_matches,
     build_ishoj_input_script,
+    build_os2faktor_pin_script,
     normalize_nodes,
     parse_foreground_package,
     parse_open_target,
@@ -23,6 +24,7 @@ from guide_capture import (  # noqa: E402
     parse_selector,
     process_annotation_spec,
     read_ishoj_credentials,
+    read_os2faktor_pin,
     validate_public_text,
     validate_annotation_spec,
 )
@@ -135,6 +137,36 @@ class GuideCaptureTests(unittest.TestCase):
         nodes[1]["password"] = False
         with self.assertRaisesRegex(ValueError, "unsafe"):
             build_ishoj_input_script(nodes, "user@example.invalid", "Safe!Pass123")
+
+    def test_os2faktor_pin_requires_six_digits_and_builds_semantic_taps(self) -> None:
+        env_path = self.temporary_path / ".env"
+        env_path.write_text("OS2FAKTOR_PIN=123001\n", encoding="utf-8")
+        env_path.chmod(0o600)
+        pin = read_os2faktor_pin(env_path)
+        nodes = [
+            {
+                "text": "Angiv pinkode",
+                "enabled": True,
+                "class": "android.widget.TextView",
+                "center": {"x": 0, "y": 0},
+            }
+        ]
+        nodes.extend(
+            {
+                "text": digit,
+                "enabled": True,
+                "class": "android.view.View",
+                "center": {"x": int(digit) * 10, "y": 500},
+            }
+            for digit in "0123"
+        )
+        script = build_os2faktor_pin_script(nodes, pin)
+        self.assertEqual(script.count("input tap"), 6)
+        self.assertTrue(script.startswith("input tap 10 500\n"))
+
+        env_path.write_text("OS2FAKTOR_PIN=12345x\n", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "six ASCII digits"):
+            read_os2faktor_pin(env_path)
 
     def test_package_version_code_allows_android_indentation(self) -> None:
         output = "    versionCode=30201 minSdk=23 targetSdk=35\n"

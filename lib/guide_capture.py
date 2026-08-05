@@ -112,9 +112,9 @@ def validate_public_text(raw: str) -> int:
     return len(raw)
 
 
-def read_ishoj_credentials(env_path: Path) -> tuple[str, str]:
+def read_protected_env_values(env_path: Path, required_keys: set[str]) -> dict[str, str]:
     if not env_path.is_file() or env_path.stat().st_mode & 0o777 != 0o600:
-        raise ValueError("Ishøj credential file is missing or is not mode 600")
+        raise ValueError("protected environment file is missing or is not mode 600")
     values: dict[str, str] = {}
     for raw_line in env_path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
@@ -125,15 +125,27 @@ def read_ishoj_credentials(env_path: Path) -> tuple[str, str]:
         value = value.strip()
         if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
             value = value[1:-1]
-        if key in {"I_ACC_EMAIL", "I_ACC_PASS"}:
+        if key in required_keys:
             if key in values:
-                raise ValueError("Ishøj credential file contains a duplicate required key")
+                raise ValueError("protected environment file contains a duplicate required key")
             values[key] = value
-    if set(values) != {"I_ACC_EMAIL", "I_ACC_PASS"}:
-        raise ValueError("Ishøj credential file is missing a required key")
+    if set(values) != required_keys:
+        raise ValueError("protected environment file is missing a required key")
+    return values
+
+
+def read_ishoj_credentials(env_path: Path) -> tuple[str, str]:
+    values = read_protected_env_values(env_path, {"I_ACC_EMAIL", "I_ACC_PASS"})
     if any(not re.fullmatch(r"[^%\s\x00-\x1f\x7f-\xff]+", value) for value in values.values()):
         raise ValueError("Ishøj credentials contain characters unsupported by Android input")
     return values["I_ACC_EMAIL"], values["I_ACC_PASS"]
+
+
+def read_os2faktor_pin(env_path: Path) -> str:
+    pin = read_protected_env_values(env_path, {"OS2FAKTOR_PIN"})["OS2FAKTOR_PIN"]
+    if not re.fullmatch(r"[0-9]{6}", pin):
+        raise ValueError("OS2faktor PIN must contain exactly six ASCII digits")
+    return pin
 
 
 def build_ishoj_input_script(nodes: list[dict[str, object]], email: str, password: str) -> str:
@@ -171,6 +183,22 @@ def build_ishoj_input_script(nodes: list[dict[str, object]], email: str, passwor
             "sleep 1",
         )
     ) + "\n"
+
+
+def build_os2faktor_pin_script(nodes: list[dict[str, object]], pin: str) -> str:
+    if len(find_matches(nodes, {"text": "Angiv pinkode"})) != 1:
+        raise ValueError("OS2faktor PIN screen marker is missing or ambiguous")
+    centers: dict[str, dict[str, int]] = {}
+    for digit in set(pin):
+        matches = [node for node in nodes if node["enabled"] and node["text"] == digit]
+        if len(matches) != 1 or matches[0]["class"] != "android.view.View":
+            raise ValueError("OS2faktor keypad digit is missing or ambiguous")
+        centers[digit] = matches[0]["center"]  # type: ignore[assignment]
+    commands: list[str] = []
+    for digit in pin:
+        center = centers[digit]
+        commands.extend((f"input tap {center['x']} {center['y']}", "sleep 0.2"))
+    return "\n".join(commands) + "\n"
 
 
 def parse_package_version_code(output: str) -> str:
@@ -645,6 +673,18 @@ def command_ishoj_input_script(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_os2faktor_pin_script(args: argparse.Namespace) -> int:
+    try:
+        nodes = json.loads(Path(args.nodes).read_text(encoding="utf-8"))
+        pin = read_os2faktor_pin(Path(args.env))
+        script = build_os2faktor_pin_script(nodes, pin)
+    except (ValueError, json.JSONDecodeError, OSError, KeyError, TypeError):
+        print("OS2faktor PIN preparation failed", file=sys.stderr)
+        return 65
+    sys.stdout.write(script)
+    return 0
+
+
 def command_foreground_package(_args: argparse.Namespace) -> int:
     try:
         print(parse_foreground_package(sys.stdin.read()))
@@ -740,6 +780,11 @@ def build_parser() -> argparse.ArgumentParser:
     ishoj_input.add_argument("nodes")
     ishoj_input.add_argument("env")
     ishoj_input.set_defaults(handler=command_ishoj_input_script)
+
+    os2_pin = subparsers.add_parser("os2faktor-pin-script")
+    os2_pin.add_argument("nodes")
+    os2_pin.add_argument("env")
+    os2_pin.set_defaults(handler=command_os2faktor_pin_script)
 
     foreground_package = subparsers.add_parser("foreground-package")
     foreground_package.set_defaults(handler=command_foreground_package)

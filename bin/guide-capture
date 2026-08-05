@@ -22,6 +22,7 @@ REVIEWED_DIR="$WORKSPACE_ROOT/reviewed-output"
 STATE_FILE="$RUNTIME_ROOT/current-run.json"
 MANIFEST="$AUTOMATION_ROOT/profiles/android-phone.json"
 HELPER="$AUTOMATION_ROOT/lib/guide_capture.py"
+WEB_TAP_HELPER="$AUTOMATION_ROOT/lib/web_tap.mjs"
 SEALED_GOLDEN="$SEALED_DIR/android-phone.tar.zst.age"
 
 ANDROID_HOME="/opt/homebrew/share/android-commandlinetools"
@@ -36,6 +37,7 @@ PYTHON="/opt/homebrew/bin/python3"
 TAR="/usr/bin/tar"
 SHASUM="/usr/bin/shasum"
 STAT="/usr/bin/stat"
+NODE="/opt/homebrew/bin/node"
 
 ADB_SERVER_PORT=5038
 EMULATOR_PORT=5556
@@ -76,8 +78,11 @@ Usage:
   guide-capture dump android
   guide-capture wait android '<selector-json>'
   guide-capture tap android '<selector-json>'
+  guide-capture web-tap android '<exact-visible-text>'
   guide-capture type-public android '<resource-id-selector-json>' <public-ascii-token>
   guide-capture login-ishoj android
+  guide-capture unlock-os2faktor android
+  guide-capture notifications android
   guide-capture back android
   guide-capture shot android <id>
   guide-capture annotate <spec.json>
@@ -212,7 +217,7 @@ command_doctor() {
   DOCTOR_FAILURES=0
 
   local tool
-  for tool in "$ADB" "$EMULATOR" "$AGE" "$ZSTD" "$MAGICK" "$JQ" "$PYTHON" "$TAR" "$SHASUM"; do
+  for tool in "$ADB" "$EMULATOR" "$AGE" "$ZSTD" "$MAGICK" "$JQ" "$PYTHON" "$TAR" "$SHASUM" "$NODE"; do
     if [[ -x "$tool" ]]; then
       doctor_add "binary:$tool" true "available"
     else
@@ -581,6 +586,48 @@ command_tap() {
     '{ok:true, command:"tap", platform:"android", center:{x:$x,y:$y}, before:{xml:$before_xml,nodes:$before_nodes}, after:{xml:$after_xml,nodes:$after_nodes}}'
 }
 
+command_web_tap() {
+  require_android "${1:-}"
+  shift
+  [[ "$#" -eq 1 ]] || fail 64 "web-tap requires one exact visible text value"
+  local exact_text="$1" forward_port=9223 result status reason after scope_count stage
+  require_target
+
+  adb_target forward "tcp:$forward_port" localabstract:chrome_devtools_remote >/dev/null \
+    || fail 69 "Chrome debugging could not be connected"
+  trap 'adb_target forward --remove "tcp:9223" >/dev/null 2>&1 || true' EXIT INT TERM
+  if result="$($NODE "$WEB_TAP_HELPER" "$forward_port" "$exact_text")"; then
+    :
+  else
+    status=$?
+    adb_target forward --remove "tcp:$forward_port" >/dev/null 2>&1 || true
+    trap - EXIT INT TERM
+    case "$status" in
+      2) reason=missing ;;
+      3) reason=ambiguous ;;
+      *) reason=invalid ;;
+    esac
+    scope_count="$(printf '%s' "$result" | "$JQ" -r '.count // .page_count // -1' 2>/dev/null || echo -1)"
+    stage="$(printf '%s' "$result" | "$JQ" -r '.stage // "unknown"' 2>/dev/null || echo unknown)"
+    diagnostic_shot web-selector-failure
+    human "Exact approved web control was $reason. Private diagnostic evidence was saved."
+    log_event failure
+    "$JQ" -nc --arg reason "$reason" --arg stage "$stage" --argjson scope_count "$scope_count" \
+      --arg screenshot "$DIAGNOSTIC_PATH" \
+      '{ok:false, command:"web-tap", reason:$reason, stage:$stage, scope_count:$scope_count, screenshot:$screenshot}'
+    return "$status"
+  fi
+  adb_target forward --remove "tcp:$forward_port" >/dev/null 2>&1 || true
+  trap - EXIT INT TERM
+
+  after="$RUN_LOG_DIR/web-tap-after-$(timestamp_id)"
+  capture_dump "$after"
+  human "Clicked one exact visible control on an approved authentication page."
+  log_event success
+  "$JQ" -nc --arg after_xml "$after.xml" --arg after_nodes "$after.json" \
+    '{ok:true, command:"web-tap", platform:"android", count:1, after:{xml:$after_xml,nodes:$after_nodes}}'
+}
+
 command_type_public() {
   require_android "${1:-}"
   shift
@@ -658,6 +705,21 @@ command_back() {
     '{ok:true, command:"back", platform:"android", before:{xml:$before_xml,nodes:$before_nodes}, after:{xml:$after_xml,nodes:$after_nodes}}'
 }
 
+command_notifications() {
+  require_android "${1:-}"
+  shift
+  require_no_extra_args "$@"
+  require_target
+  local evidence
+  adb_target shell cmd statusbar expand-notifications
+  evidence="$RUN_LOG_DIR/notifications-$(timestamp_id)"
+  capture_dump "$evidence"
+  human "Opened Android notifications and saved private hierarchy evidence."
+  log_event success
+  "$JQ" -nc --arg xml "$evidence.xml" --arg nodes "$evidence.json" \
+    '{ok:true, command:"notifications", platform:"android", xml:$xml, nodes:$nodes}'
+}
+
 command_login_ishoj() {
   require_android "${1:-}"
   shift
@@ -699,6 +761,41 @@ command_login_ishoj() {
     fi
   done
   fail 69 "the Ishøj login form remained after submission"
+}
+
+command_unlock_os2faktor() {
+  require_android "${1:-}"
+  shift
+  require_no_extra_args "$@"
+  require_target
+
+  local env_file="$WORKSPACE_ROOT/.env" before sensitive deadline match_status
+  before="$RUN_DIR/os2faktor-pin-before"
+  sensitive="$RUN_DIR/os2faktor-pin-sensitive"
+  trap '/bin/rm -f -- "$before.xml" "$before.json" "$sensitive.xml" "$sensitive.json"' EXIT INT TERM
+
+  capture_dump "$before"
+  if ! "$PYTHON" "$HELPER" os2faktor-pin-script "$before.json" "$env_file" | adb_target shell >/dev/null; then
+    fail 65 "OS2faktor PIN could not be entered safely"
+  fi
+
+  deadline=$(( $(/bin/date +%s) + 20 ))
+  while (( $(/bin/date +%s) < deadline )); do
+    capture_dump "$sensitive"
+    if "$PYTHON" "$HELPER" match "$sensitive.json" '{"text":"Angiv pinkode"}' >/dev/null; then
+      /bin/sleep 1
+    else
+      match_status=$?
+      [[ "$match_status" -eq 2 ]] || fail 69 "the OS2faktor state could not be verified after PIN entry"
+      /bin/rm -f -- "$before.xml" "$before.json" "$sensitive.xml" "$sensitive.json"
+      trap - EXIT INT TERM
+      human "Entered the protected OS2faktor PIN and left the PIN screen."
+      log_event success
+      "$JQ" -nc '{ok:true, command:"unlock-os2faktor", platform:"android", pin_screen:false, sensitive_evidence_retained:false}'
+      return 0
+    fi
+  done
+  fail 69 "the OS2faktor PIN screen remained after entry"
 }
 
 command_shot() {
@@ -857,6 +954,10 @@ case "$COMMAND_NAME" in
     shift
     command_tap "$@"
     ;;
+  web-tap)
+    shift
+    command_web_tap "$@"
+    ;;
   type-public)
     shift
     command_type_public "$@"
@@ -864,6 +965,14 @@ case "$COMMAND_NAME" in
   login-ishoj)
     shift
     command_login_ishoj "$@"
+    ;;
+  unlock-os2faktor)
+    shift
+    command_unlock_os2faktor "$@"
+    ;;
+  notifications)
+    shift
+    command_notifications "$@"
     ;;
   back)
     shift

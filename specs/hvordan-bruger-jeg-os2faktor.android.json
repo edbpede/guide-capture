@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "slug": "hvordan-bruger-jeg-os2faktor",
+  "start": {
+    "type": "url",
+    "value": "https://aula.dk"
+  },
+  "steps": [
+    {
+      "id": "01",
+      "find": {
+        "text": "Unilogin Unilogin Lokalt login "
+      },
+      "expect_after": {
+        "text": "Lokalt login"
+      },
+      "annotate": {
+        "type": "highlight",
+        "bounds": [36, 881, 1044, 1288],
+        "number": 1
+      },
+      "redact": []
+    },
+    {
+      "id": "02",
+      "annotate": {
+        "type": "highlight",
+        "bounds": [0, 420, 710, 565],
+        "number": 2
+      },
+      "redact": []
+    },
+    {
+      "id": "03",
+      "annotate": {
+        "type": "highlight",
+        "bounds": [108, 1180, 975, 1395],
+        "number": 3
+      },
+      "redact": []
+    },
+    {
+      "id": "04",
+      "annotate": {
+        "type": "highlight",
+        "bounds": [900, 285, 1060, 440],
+        "number": 4
+      },
+      "redact": []
+    },
+    {
+      "id": "05",
+      "annotate": {
+        "type": "highlight",
+        "bounds": [210, 955, 800, 1095],
+        "number": 5
+      },
+      "redact": [
+        {
+          "bounds": [245, 1095, 650, 1205],
+          "reason": "unrelated enrolled device name"
+        }
+      ]
+    },
+    {
+      "id": "06",
+      "annotate": {
+        "type": "highlight",
+        "bounds": [95, 720, 990, 1520],
+        "number": 6
+      },
+      "redact": [
+        {
+          "bounds": [180, 2210, 900, 2350],
+          "reason": "OS2faktor enrollment identifier"
+        }
+      ]
+    },
+    {
+      "id": "07",
+      "annotate": {
+        "type": "highlight",
+        "bounds": [450, 395, 760, 560],
+        "number": 7
+      },
+      "redact": [
+        {
+          "bounds": [40, 1180, 1035, 2250],
+          "reason": "child names and secure-file content"
+        }
+      ]
+    }
+  ]
+}
