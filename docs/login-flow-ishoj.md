@@ -19,6 +19,11 @@ the municipality's identity provider.
 
 ## Secret handling
 
+- The authorized local credential source is
+  `/Users/dkp/Documents/GitHub/edbpede/guide-capture/.env`; it contains `I_ACC_EMAIL` and
+  `I_ACC_PASS`. Codex may verify that this file exists and is protected, but must not print, log,
+  document, or pass the resolved values to automation. The device owner enters them directly in
+  the emulator when prompted.
 - Keep `.env` at mode `600` and excluded from version control.
 - Load secret values only at execution time; never print them or place their resolved values in
   commands, logs, screenshots, specifications, or documentation.
