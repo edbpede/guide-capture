@@ -1,0 +1,38 @@
+# prek.toml — Git hook configuration for guide-capture.
+# Docs: https://prek.j178.dev/configuration/
+
+[[repos]]
+repo = "builtin"
+hooks = [
+  { id = "trailing-whitespace" },
+  { id = "end-of-file-fixer" },
+  { id = "mixed-line-ending", args = ["--fix=lf"] },
+  { id = "check-merge-conflict" },
+  { id = "check-case-conflict" },
+  { id = "check-added-large-files", args = ["--maxkb=512"] },
+  { id = "detect-private-key" },
+  { id = "check-json" },
+  { id = "check-toml" },
+]
+
+[[repos]]
+repo = "https://github.com/compilerla/conventional-pre-commit"
+rev = "v4.4.0"
+hooks = [
+  { id = "conventional-pre-commit", stages = ["commit-msg"] },
+]
+
+[[repos]]
+repo = "https://github.com/gitleaks/gitleaks"
+rev = "v8.30.1"
+hooks = [
+  { id = "gitleaks" },
+]
+
+[[repos]]
+repo = "local"
+hooks = [
+  { id = "sensitive-staged-paths", name = "reject sensitive staged paths", entry = "bin/check-sensitive-files", language = "system", always_run = true, pass_filenames = false },
+  { id = "shellcheck", name = "shellcheck", entry = "shellcheck bin/guide-capture bin/check-sensitive-files", language = "system", always_run = true, pass_filenames = false },
+  { id = "python-tests", name = "Python unit tests", entry = "python3 -m unittest discover -s tests -v", language = "system", always_run = true, pass_filenames = false },
+]

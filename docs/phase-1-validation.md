@@ -64,3 +64,15 @@ targets the unrelated `spidola-tv-m0` AVD.
 - `bin/guide-capture doctor`
 
 All pass after cleanup, with zero plaintext run directories and no plaintext golden AVD.
+
+## Commit-time checks
+
+Git hooks are managed by `prek` using the repository-root `prek.toml`. The pre-commit stage runs
+fast formatting and file-safety checks, Gitleaks, the repository's sensitive staged-path guard,
+ShellCheck, and the Python unit tests. The commit-message stage enforces Conventional Commits.
+
+Install and verify the hooks with:
+
+- `/Users/dkp/.local/bin/prek install --hook-type pre-commit --hook-type commit-msg`
+- `/Users/dkp/.local/bin/prek validate-config prek.toml`
+- `/Users/dkp/.local/bin/prek run --all-files`
