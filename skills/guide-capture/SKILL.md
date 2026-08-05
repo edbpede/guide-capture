@@ -8,17 +8,22 @@ description: Capture, verify, redact, annotate, and stage reproducible Android s
 Use the stable wrapper to run one short, disposable Android capture session. Treat every raw image,
 UI dump, authentication screen, and enrolled emulator as sensitive.
 
-## Fixed locations
+## Locations
 
-- Wrapper: `/Users/dkp/Documents/GitHub/edbpede/guide-capture/automation/bin/guide-capture`
-- Specifications: `/Users/dkp/Documents/GitHub/edbpede/guide-capture/automation/specs/`
-- Guides: `/Users/dkp/Documents/GitHub/edbpede/guides/`
-- Reviewed output: `/Users/dkp/Documents/GitHub/edbpede/guide-capture/reviewed-output/`
+All paths below are relative to the repository root. Resolve them against the checkout you are
+working in; do not hardcode an absolute path.
+
+- Wrapper: `bin/guide-capture`
+- Specifications: `specs/`
+- Reviewed output: `private/reviewed-output/`
+- Credential source: `private/.env`
+
+Everything under `private/` is gitignored and never published. Set `GUIDE_CAPTURE_PRIVATE` to
+relocate that directory. The separate guides repository defaults to `../guides`; set
+`GUIDE_CAPTURE_GUIDES` when it lives elsewhere.
 
 Read the target MDX and JSON specification before booting. For an Ishøj education-service login,
-also read
-`/Users/dkp/Documents/GitHub/edbpede/guide-capture/automation/docs/login-flow-ishoj.md`. Do not load
-or repeat secret values from `.env`.
+also read `docs/login-flow-ishoj.md`. Do not load or repeat secret values from `private/.env`.
 
 ## Non-negotiable rules
 
@@ -26,9 +31,9 @@ or repeat secret values from `.env`.
 - Never pass passwords, PINs, one-time codes, enrollment secrets, or token-bearing URLs as arguments.
 - Never type a secret with generic UI or shell commands. The sole project-specific exception is
   `login-ishoj android` for `I_ACC_EMAIL` and `I_ACC_PASS`, plus `unlock-os2faktor android` for
-  `OS2FAKTOR_PIN`, from `/Users/dkp/Documents/GitHub/edbpede/guide-capture/.env`. The project owner's
-  standing authorization is recorded in `docs/login-flow-ishoj.md`; do not request per-run
-  confirmation while its file, variables, destination allowlist, and purpose remain unchanged.
+  `OS2FAKTOR_PIN`, from `private/.env`. The credential authorization contract is recorded in
+  `docs/login-flow-ishoj.md`; do not request per-run confirmation while its file, variables,
+  destination allowlist, and purpose remain unchanged.
 - Use exact `text`, `content_desc`, or `resource_id` selectors from fresh UI dumps.
 - If Chrome renders an approved Aula or authentication page but UIAutomator exposes only a WebView,
   `web-tap android '<exact-visible-text>'` may click one exact visible DOM control. It searches only
@@ -132,7 +137,7 @@ platform without owner approval.
 7. Run `guide-capture kill android` before waiting for review.
 
 If review requires annotation or redaction corrections after shutdown, archive the rejected
-reviewed-output directory beneath `runtime/`, update the specification, and run
+reviewed-output directory beneath `private/runtime/`, update the specification, and run
 `guide-capture annotate <spec.json> <retained-run-id>`. Supply the exact reviewed run ID; never
 select or infer a retained run automatically, and do not reboot solely for offline image changes.
 

@@ -10,9 +10,9 @@ the required shutdown and human review, `guide-capture annotate <spec.json> <ret
 reprocess that exact retained raw-capture directory for annotation or redaction corrections without
 booting an emulator. The command never selects a retained run automatically.
 
-The specification must be a JSON file beneath `automation/specs/`. A step with ID `02` consumes
-`runtime/raw-captures/<run-id>/02.png` and stages its result as
-`reviewed-output/<slug>/02.android.png`.
+The specification must be a JSON file beneath `specs/`. A step with ID `02` consumes
+`private/runtime/raw-captures/<run-id>/02.png` and stages its result as
+`private/reviewed-output/<slug>/02.android.png`.
 
 The command does not publish files into the guides repository. Every result is marked as requiring
 human review.
@@ -92,7 +92,7 @@ reviewed-output root and per-guide output directory.
 
 - `python3 -m unittest discover -s tests -v`
 - `shellcheck bin/guide-capture bin/check-sensitive-files`
-- `/Users/dkp/.local/bin/prek run --all-files`
+- `prek run --all-files`
 - `bin/guide-capture doctor`
 
 Tests verify that missing redaction decisions and out-of-bounds coordinates fail before output,

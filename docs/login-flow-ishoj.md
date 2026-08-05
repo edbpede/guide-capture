@@ -3,18 +3,18 @@
 Use this route for Aula and other Danish education services that delegate employee login to
 the municipality's identity provider.
 
-## Recorded owner authorization
+## Credential authorization contract
 
-The project owner explicitly authorizes guide-capture automation and Codex agents operating in
-this workspace to read `/Users/dkp/Documents/GitHub/edbpede/guide-capture/.env` and use
-`I_ACC_EMAIL`, `I_ACC_PASS`, and `OS2FAKTOR_PIN` to complete the approved Ishøj education-service
-login flow, including Aula and OS2faktor. This is standing authorization: do not request confirmation
-again for each run when the file, variables, destination allowlist, and purpose are unchanged.
+The workspace owner authorizes guide-capture automation and agents operating in this workspace to
+read `private/.env` and use `I_ACC_EMAIL`, `I_ACC_PASS`, and `OS2FAKTOR_PIN` to complete the approved
+education-service login flow, including Aula and OS2faktor. This is standing authorization: do not
+request confirmation again for each run while the file, variables, destination allowlist, and purpose
+are unchanged.
 
-This authorization covers entering and submitting the protected values through the dedicated
-`login-ishoj` and `unlock-os2faktor` commands. It does not authorize printing, logging, publishing,
-or retaining the resolved values. Request fresh authorization if the credential source, variables,
-destination allowlist, or purpose changes.
+Scope: entry and submission only, through the dedicated `login-ishoj` and `unlock-os2faktor`
+commands. The contract does not authorize printing, logging, publishing, or retaining the resolved
+values. Re-authorization is required if the credential source, variables, destination allowlist, or
+purpose changes.
 
 ## Route
 
@@ -24,7 +24,7 @@ destination allowlist, or purpose changes.
 4. Search for Ishøj and select the listing. The broker may label it `Ishøj` rather than
    `Ishøj Kommune`.
 5. On the Ishøj IdP page, run `guide-capture login-ishoj android`. It reads `I_ACC_EMAIL` and
-   `I_ACC_PASS` from the workspace-root `.env`, enters them through a private pipe, submits the
+   `I_ACC_PASS` from the private `.env`, enters them through a private pipe, submits the
    exact `Login` control, and removes credential-bearing hierarchy evidence.
 6. If higher assurance is requested, select the OS2faktor device `EmuDroid`, open the Android
    app, run `guide-capture unlock-os2faktor android`, verify that the browser and app control codes
@@ -32,8 +32,8 @@ destination allowlist, or purpose changes.
 
 ## Secret handling
 
-- The authorized local credential source is
-  `/Users/dkp/Documents/GitHub/edbpede/guide-capture/.env`; it contains `I_ACC_EMAIL`,
+- The authorized local credential source is `private/.env` (relative to the repository root, or
+  `$GUIDE_CAPTURE_PRIVATE/.env` when overridden); it contains `I_ACC_EMAIL`,
   `I_ACC_PASS`, and `OS2FAKTOR_PIN`. The dedicated `login-ishoj` and `unlock-os2faktor` commands
   may load these values under the standing authorization recorded above. They must never print,
   log, document, or pass the resolved values as command-line arguments.

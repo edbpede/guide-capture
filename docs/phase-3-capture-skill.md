@@ -49,5 +49,5 @@ images must not silently reduce the requested Android capture set.
 - `shellcheck bin/guide-capture bin/check-sensitive-files`
 - `python3 -m unittest discover -s tests -v`
 - Skill-creator `quick_validate.py skills/guide-capture`
-- `/Users/dkp/.local/bin/prek run --all-files`
+- `prek run --all-files`
 - `bin/guide-capture doctor`

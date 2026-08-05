@@ -73,6 +73,6 @@ ShellCheck, and the Python unit tests. The commit-message stage enforces Convent
 
 Install and verify the hooks with:
 
-- `/Users/dkp/.local/bin/prek install --hook-type pre-commit --hook-type commit-msg`
-- `/Users/dkp/.local/bin/prek validate-config prek.toml`
-- `/Users/dkp/.local/bin/prek run --all-files`
+- `prek install --hook-type pre-commit --hook-type commit-msg`
+- `prek validate-config prek.toml`
+- `prek run --all-files`
