@@ -18,6 +18,7 @@ RAW_DIR="$RUNTIME_ROOT/raw-captures"
 LOGS_DIR="$RUNTIME_ROOT/logs"
 SEALED_DIR="$RUNTIME_ROOT/sealed-goldens"
 EMULATOR_HOME="$RUNTIME_ROOT/emulator-home"
+REVIEWED_DIR="$WORKSPACE_ROOT/reviewed-output"
 STATE_FILE="$RUNTIME_ROOT/current-run.json"
 MANIFEST="$AUTOMATION_ROOT/profiles/android-phone.json"
 HELPER="$AUTOMATION_ROOT/lib/guide_capture.py"
@@ -75,6 +76,7 @@ Usage:
   guide-capture wait android '<selector-json>'
   guide-capture tap android '<selector-json>'
   guide-capture shot android <id>
+  guide-capture annotate <spec.json>
   guide-capture kill android
   guide-capture seal android
 
@@ -252,6 +254,15 @@ command_doctor() {
   doctor_add emulator-version "$([[ "$emulator_version" == *"$expected_emulator"*"$expected_emulator_build"* ]] && echo true || echo false)" "$emulator_version"
   doctor_add adb-version "$([[ "$adb_version" == *"$expected_adb"*"$expected_adb_build"* ]] && echo true || echo false)" "$adb_version"
   doctor_add imagemagick true "$magick_version"
+
+  local annotation_font=missing font_candidate
+  for font_candidate in /System/Library/Fonts/SFNS.ttf /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf; do
+    if [[ -f "$font_candidate" ]]; then
+      annotation_font="$font_candidate"
+      break
+    fi
+  done
+  doctor_add annotation-font "$([[ "$annotation_font" != missing ]] && echo true || echo false)" "$annotation_font"
 
   local ok=true
   [[ "$DOCTOR_FAILURES" -eq 0 ]] || ok=false
@@ -540,6 +551,37 @@ command_shot() {
     '{ok:true, command:"shot", platform:"android", id:$id, path:$path, dimensions:$dimensions, sha256:$sha256, device_time:$device_time}'
 }
 
+command_annotate() {
+  [[ "$#" -eq 1 ]] || fail 64 "annotate requires one JSON specification"
+  ensure_runtime_dirs
+  load_state
+
+  local spec="$1" spec_resolved specs_resolved run_id raw_dir result status error
+  [[ -f "$spec" ]] || fail 66 "annotation specification is missing"
+  spec_resolved="$(real_path "$spec")"
+  specs_resolved="$(real_path "$AUTOMATION_ROOT/specs")"
+  case "$spec_resolved" in
+    "$specs_resolved"/*.json) ;;
+    *) fail 64 "annotation specification must be a JSON file inside automation/specs" ;;
+  esac
+
+  run_id="$(state_value run_id)"
+  [[ "$run_id" =~ ^android-[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || fail 65 "current run ID is invalid"
+  raw_dir="$RAW_DIR/$run_id"
+  /bin/mkdir -p "$REVIEWED_DIR"
+  /bin/chmod 700 "$REVIEWED_DIR"
+  if result="$($PYTHON "$HELPER" annotate "$spec_resolved" "$raw_dir" "$REVIEWED_DIR" "$MAGICK")"; then
+    human "Prepared redacted Android images for human review."
+    log_event success
+    printf '%s\n' "$result"
+    return 0
+  else
+    status=$?
+    error="$(printf '%s' "$result" | "$JQ" -r '.error // "annotation failed"')"
+    fail "$status" "$error"
+  fi
+}
+
 command_kill() {
   require_android "${1:-}"
   shift
@@ -641,6 +683,10 @@ case "$COMMAND_NAME" in
   shot)
     shift
     command_shot "$@"
+    ;;
+  annotate)
+    shift
+    command_annotate "$@"
     ;;
   kill)
     shift
