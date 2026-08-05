@@ -1,0 +1,660 @@
+#!/bin/bash
+
+# jq programs are intentionally single-quoted so the shell does not expand jq variables.
+# shellcheck disable=SC2016
+
+set -euo pipefail
+umask 077
+
+PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+AUTOMATION_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+WORKSPACE_ROOT="$(cd -- "$AUTOMATION_ROOT/.." && pwd -P)"
+RUNTIME_ROOT="$WORKSPACE_ROOT/runtime"
+RUNS_DIR="$RUNTIME_ROOT/runs"
+RAW_DIR="$RUNTIME_ROOT/raw-captures"
+LOGS_DIR="$RUNTIME_ROOT/logs"
+SEALED_DIR="$RUNTIME_ROOT/sealed-goldens"
+EMULATOR_HOME="$RUNTIME_ROOT/emulator-home"
+STATE_FILE="$RUNTIME_ROOT/current-run.json"
+MANIFEST="$AUTOMATION_ROOT/profiles/android-phone.json"
+HELPER="$AUTOMATION_ROOT/lib/guide_capture.py"
+SEALED_GOLDEN="$SEALED_DIR/android-phone.tar.zst.age"
+
+ANDROID_HOME="/opt/homebrew/share/android-commandlinetools"
+ANDROID_SDK_ROOT="$ANDROID_HOME"
+ADB="$ANDROID_HOME/platform-tools/adb"
+EMULATOR="$ANDROID_HOME/emulator/emulator"
+AGE="/opt/homebrew/bin/age"
+ZSTD="/opt/homebrew/bin/zstd"
+MAGICK="/opt/homebrew/bin/magick"
+JQ="/usr/bin/jq"
+PYTHON="/opt/homebrew/bin/python3"
+TAR="/usr/bin/tar"
+SHASUM="/usr/bin/shasum"
+STAT="/usr/bin/stat"
+
+ADB_SERVER_PORT=5038
+EMULATOR_PORT=5556
+ANDROID_ADB_SERVER_PORT="$ADB_SERVER_PORT"
+export ANDROID_HOME ANDROID_SDK_ROOT ANDROID_ADB_SERVER_PORT
+
+COMMAND_NAME="${1:-help}"
+EMULATOR_PID=""
+
+human() {
+  printf '%s\n' "$*" >&2
+}
+
+log_event() {
+  local outcome="$1"
+  /bin/mkdir -p "$LOGS_DIR"
+  printf '%s command=%s outcome=%s\n' \
+    "$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)" "$COMMAND_NAME" "$outcome" >>"$LOGS_DIR/guide-capture.log"
+}
+
+fail() {
+  local exit_code="$1"
+  shift
+  local message="$*"
+  human "Error: $message"
+  log_event failure
+  "$JQ" -nc --arg command "$COMMAND_NAME" --arg error "$message" \
+    '{ok:false, command:$command, error:$error}'
+  exit "$exit_code"
+}
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  guide-capture doctor
+  guide-capture boot android
+  guide-capture dump android
+  guide-capture wait android '<selector-json>'
+  guide-capture tap android '<selector-json>'
+  guide-capture shot android <id>
+  guide-capture kill android
+  guide-capture seal android
+
+Selectors contain exactly one exact-match field:
+  {"text":"Filer"}
+  {"content_desc":"Filer"}
+  {"resource_id":"dk.example:id/files"}
+EOF
+}
+
+require_no_extra_args() {
+  [[ "$#" -eq 0 ]] || fail 64 "unexpected arguments"
+}
+
+require_android() {
+  [[ "${1:-}" == "android" ]] || fail 64 "expected platform: android"
+}
+
+ensure_runtime_dirs() {
+  /bin/mkdir -p "$RUNS_DIR" "$RAW_DIR" "$LOGS_DIR" "$SEALED_DIR" "$EMULATOR_HOME"
+  /bin/chmod 700 "$RUNTIME_ROOT" "$RUNS_DIR" "$RAW_DIR" "$LOGS_DIR" "$SEALED_DIR" "$EMULATOR_HOME"
+}
+
+real_path() {
+  "$PYTHON" -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"
+}
+
+safe_remove_run() {
+  local candidate="$1"
+  local resolved runs_resolved
+  resolved="$(real_path "$candidate")"
+  runs_resolved="$(real_path "$RUNS_DIR")"
+  case "$resolved" in
+    "$runs_resolved"/android-*) ;;
+    *) fail 70 "refusing to remove a path outside the validated Android runs directory" ;;
+  esac
+  [[ "$resolved" != "$runs_resolved" ]] || fail 70 "refusing to remove the runs directory itself"
+  /bin/rm -rf -- "$resolved"
+}
+
+load_state() {
+  [[ -f "$STATE_FILE" ]] || fail 69 "no active Android run"
+  "$JQ" -e '.schema_version == 1 and (.run_dir | type == "string")' "$STATE_FILE" >/dev/null \
+    || fail 65 "current run state is invalid"
+}
+
+state_value() {
+  "$JQ" -er ".$1" "$STATE_FILE"
+}
+
+adb_start() {
+  "$ADB" start-server >/dev/null
+}
+
+require_target() {
+  load_state
+  adb_start
+  local expected devices count
+  expected="$(state_value serial)"
+  devices="$("$ADB" devices | /usr/bin/awk 'NR > 1 && $2 == "device" {print $1}')"
+  count="$(printf '%s\n' "$devices" | /usr/bin/awk 'NF {count++} END {print count + 0}')"
+  [[ "$count" -eq 1 ]] || fail 69 "expected exactly one connected target on the dedicated ADB server; found $count"
+  [[ "$devices" == "$expected" ]] || fail 69 "connected target does not match the active run"
+  SERIAL="$expected"
+  RUN_ID="$(state_value run_id)"
+  RUN_DIR="$(state_value run_dir)"
+  RUN_LOG_DIR="$LOGS_DIR/$RUN_ID"
+  RUN_RAW_DIR="$RAW_DIR/$RUN_ID"
+}
+
+adb_target() {
+  "$ADB" -s "$SERIAL" "$@"
+}
+
+timestamp_id() {
+  printf '%s-%s' "$(/bin/date -u +%Y%m%dT%H%M%SZ)" "$$"
+}
+
+capture_dump() {
+  local base="$1"
+  /bin/mkdir -p "$(dirname -- "$base")"
+  adb_target shell uiautomator dump /sdcard/window.xml >/dev/null
+  adb_target exec-out cat /sdcard/window.xml >"$base.xml"
+  "$PYTHON" "$HELPER" normalize "$base.xml" "$base.json" >/dev/null
+  /bin/chmod 600 "$base.xml" "$base.json"
+}
+
+diagnostic_shot() {
+  local label="$1"
+  /bin/mkdir -p "$RUN_RAW_DIR"
+  DIAGNOSTIC_PATH="$RUN_RAW_DIR/${label}-$(timestamp_id).png"
+  adb_target exec-out screencap -p >"$DIAGNOSTIC_PATH"
+  /bin/chmod 600 "$DIAGNOSTIC_PATH"
+}
+
+clear_notifications_semantically() {
+  local base="$RUN_DIR/notification-check" match_json x y result=unsupported
+  adb_target shell cmd statusbar expand-notifications
+  capture_dump "$base"
+  if match_json="$($PYTHON "$HELPER" match "$base.json" '{"text":"Ingen notifikationer"}')"; then
+    result=none
+  elif match_json="$($PYTHON "$HELPER" match "$base.json" '{"text":"Ryd alle"}')"; then
+    x="$(printf '%s' "$match_json" | "$JQ" -r '.matches[0].center.x')"
+    y="$(printf '%s' "$match_json" | "$JQ" -r '.matches[0].center.y')"
+    adb_target shell input tap "$x" "$y"
+    result=cleared
+  elif match_json="$($PYTHON "$HELPER" match "$base.json" '{"content_desc":"Ryd alle"}')"; then
+    x="$(printf '%s' "$match_json" | "$JQ" -r '.matches[0].center.x')"
+    y="$(printf '%s' "$match_json" | "$JQ" -r '.matches[0].center.y')"
+    adb_target shell input tap "$x" "$y"
+    result=cleared
+  fi
+  adb_target shell cmd statusbar collapse
+  printf '%s' "$result"
+}
+
+doctor_add() {
+  local name="$1" ok="$2" detail="$3"
+  DOCTOR_CHECKS="$("$JQ" -nc \
+    --argjson checks "$DOCTOR_CHECKS" --arg name "$name" --argjson ok "$ok" --arg detail "$detail" \
+    '$checks + [{name:$name, ok:$ok, detail:$detail}]')"
+  [[ "$ok" == true ]] || DOCTOR_FAILURES=$((DOCTOR_FAILURES + 1))
+}
+
+command_doctor() {
+  require_no_extra_args "$@"
+  ensure_runtime_dirs
+  DOCTOR_CHECKS='[]'
+  DOCTOR_FAILURES=0
+
+  local tool
+  for tool in "$ADB" "$EMULATOR" "$AGE" "$ZSTD" "$MAGICK" "$JQ" "$PYTHON" "$TAR" "$SHASUM"; do
+    if [[ -x "$tool" ]]; then
+      doctor_add "binary:$tool" true "available"
+    else
+      doctor_add "binary:$tool" false "missing or not executable"
+    fi
+  done
+
+  local image_dir="$ANDROID_HOME/system-images/android-36/google_apis_playstore/arm64-v8a"
+  local revision="missing"
+  if [[ -f "$image_dir/source.properties" ]]; then
+    revision="$(/usr/bin/awk -F= '$1 == "Pkg.Revision" {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}' "$image_dir/source.properties")"
+  fi
+  doctor_add system-image "$([[ "$revision" == "7" ]] && echo true || echo false)" "revision=$revision"
+
+  local runtime_mode
+  runtime_mode="$($STAT -f '%Lp' "$RUNTIME_ROOT")"
+  doctor_add runtime-permissions "$([[ "$runtime_mode" == "700" ]] && echo true || echo false)" "mode=$runtime_mode"
+
+  if "$JQ" -e '.schema_version == 1' "$MANIFEST" >/dev/null 2>&1; then
+    doctor_add manifest true "valid schema"
+  else
+    doctor_add manifest false "missing or invalid"
+  fi
+
+  local expected_hash actual_hash
+  expected_hash="$($JQ -r '.sealed.archive_sha256 // empty' "$MANIFEST" 2>/dev/null || true)"
+  if [[ -f "$SEALED_GOLDEN" ]]; then
+    actual_hash="$($SHASUM -a 256 "$SEALED_GOLDEN" | /usr/bin/awk '{print $1}')"
+    doctor_add sealed-golden "$([[ -n "$expected_hash" && "$actual_hash" == "$expected_hash" ]] && echo true || echo false)" \
+      "encrypted archive present; manifest hash $([[ "$actual_hash" == "$expected_hash" ]] && echo matches || echo differs)"
+  else
+    doctor_add sealed-golden false "encrypted archive missing"
+  fi
+
+  local emulator_version adb_version magick_version expected_emulator expected_emulator_build expected_adb expected_adb_build
+  emulator_version="$($EMULATOR -version 2>&1 | /usr/bin/head -1)"
+  adb_version="$($ADB version 2>&1 | /usr/bin/head -2 | /usr/bin/tr '\n' ' ')"
+  magick_version="$($MAGICK -version 2>&1 | /usr/bin/head -1)"
+  expected_emulator="$($JQ -r '.emulator.version' "$MANIFEST")"
+  expected_emulator_build="$($JQ -r '.emulator.build' "$MANIFEST")"
+  expected_adb="$($JQ -r '.adb.version' "$MANIFEST")"
+  expected_adb_build="$($JQ -r '.adb.build' "$MANIFEST")"
+  doctor_add emulator-version "$([[ "$emulator_version" == *"$expected_emulator"*"$expected_emulator_build"* ]] && echo true || echo false)" "$emulator_version"
+  doctor_add adb-version "$([[ "$adb_version" == *"$expected_adb"*"$expected_adb_build"* ]] && echo true || echo false)" "$adb_version"
+  doctor_add imagemagick true "$magick_version"
+
+  local ok=true
+  [[ "$DOCTOR_FAILURES" -eq 0 ]] || ok=false
+  human "Doctor: $([[ "$ok" == true ]] && echo PASS || echo FAIL) ($DOCTOR_FAILURES failing checks)"
+  log_event "$([[ "$ok" == true ]] && echo success || echo failure)"
+  "$JQ" -nc --argjson ok "$ok" --argjson checks "$DOCTOR_CHECKS" \
+    '{ok:$ok, command:"doctor", checks:$checks}'
+  [[ "$ok" == true ]]
+}
+
+verify_equal() {
+  local label="$1" actual="$2" expected="$3"
+  [[ "$actual" == "$expected" ]] || fail 65 "$label differs from the sealed manifest"
+}
+
+wait_for_boot() {
+  local deadline=$(( $(/bin/date +%s) + 120 ))
+  while (( $(/bin/date +%s) < deadline )); do
+    if "$ADB" -s "$SERIAL" get-state >/dev/null 2>&1; then
+      local completed
+      completed="$("$ADB" -s "$SERIAL" shell getprop sys.boot_completed 2>/dev/null | /usr/bin/tr -d '\r')"
+      [[ "$completed" == 1 ]] && return 0
+    fi
+    /bin/sleep 1
+  done
+  return 1
+}
+
+cleanup_failed_boot() {
+  local exit_code=$?
+  trap - EXIT INT TERM
+  if [[ "${BOOT_COMPLETE:-0}" != 1 ]]; then
+    if [[ -n "${SERIAL:-}" ]]; then
+      "$ADB" -s "$SERIAL" emu kill >/dev/null 2>&1 || true
+    fi
+    if [[ -n "$EMULATOR_PID" ]]; then
+      local deadline=$(( $(/bin/date +%s) + 25 ))
+      while /bin/kill -0 "$EMULATOR_PID" >/dev/null 2>&1 && (( $(/bin/date +%s) < deadline )); do
+        /bin/sleep 1
+      done
+      if /bin/kill -0 "$EMULATOR_PID" >/dev/null 2>&1; then
+        /bin/kill "$EMULATOR_PID" >/dev/null 2>&1 || true
+      fi
+      wait "$EMULATOR_PID" >/dev/null 2>&1 || true
+    fi
+    "$ADB" kill-server >/dev/null 2>&1 || true
+    if [[ -n "${RUN_DIR:-}" && -d "${RUN_DIR:-}" ]]; then
+      safe_remove_run "$RUN_DIR"
+      /bin/sleep 1
+      [[ ! -d "$RUN_DIR" ]] || safe_remove_run "$RUN_DIR"
+    fi
+    /bin/rm -f -- "$STATE_FILE"
+  fi
+  exit "$exit_code"
+}
+
+command_boot() {
+  require_android "${1:-}"
+  shift
+  require_no_extra_args "$@"
+  ensure_runtime_dirs
+  [[ ! -e "$STATE_FILE" ]] || fail 69 "an Android run is already active"
+  [[ -f "$SEALED_GOLDEN" ]] || fail 66 "sealed Android golden is missing"
+
+  local expected_hash actual_hash
+  expected_hash="$($JQ -er '.sealed.archive_sha256' "$MANIFEST")"
+  actual_hash="$($SHASUM -a 256 "$SEALED_GOLDEN" | /usr/bin/awk '{print $1}')"
+  [[ "$actual_hash" == "$expected_hash" ]] || fail 65 "sealed Android golden hash differs from the manifest"
+
+  local token source_name avd_name avd_home source_dir avd_dir state_tmp emulator_log
+  token="$(timestamp_id)"
+  RUN_ID="android-$token"
+  RUN_DIR="$RUNS_DIR/$RUN_ID"
+  avd_home="$RUN_DIR/avd"
+  source_name="$($JQ -er '.source_avd' "$MANIFEST")"
+  avd_name="edb-phone-run-${token//[^A-Za-z0-9]/}"
+  SERIAL="emulator-$EMULATOR_PORT"
+  RUN_LOG_DIR="$LOGS_DIR/$RUN_ID"
+  RUN_RAW_DIR="$RAW_DIR/$RUN_ID"
+  emulator_log="$RUN_LOG_DIR/emulator.log"
+  BOOT_COMPLETE=0
+  trap cleanup_failed_boot EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+
+  /bin/mkdir -p "$avd_home" "$RUN_LOG_DIR" "$RUN_RAW_DIR"
+  human "Decrypting the encrypted Android golden into a fresh run. age will request the passphrase securely."
+  "$AGE" --decrypt "$SEALED_GOLDEN" | "$ZSTD" -d -c | "$TAR" -xf - -C "$avd_home"
+
+  source_dir="$avd_home/$source_name.avd"
+  avd_dir="$avd_home/$avd_name.avd"
+  [[ -d "$source_dir" && -f "$avd_home/$source_name.ini" ]] || fail 65 "sealed archive does not contain the expected AVD"
+  /bin/mv -- "$source_dir" "$avd_dir"
+  /bin/rm -f -- "$avd_home/$source_name.ini"
+  "$PYTHON" "$HELPER" rewrite-avd "$avd_dir" "$source_name" "$avd_name" "$avd_home" >/dev/null
+  printf 'avd.ini.encoding=UTF-8\npath=%s\ntarget=android-36\n' "$avd_dir" >"$avd_home/$avd_name.ini"
+
+  "$ADB" kill-server >/dev/null 2>&1 || true
+  adb_start
+  env ANDROID_AVD_HOME="$avd_home" ANDROID_EMULATOR_HOME="$EMULATOR_HOME" \
+    "$EMULATOR" -avd "$avd_name" -port "$EMULATOR_PORT" -no-snapshot-load -no-snapshot-save \
+    -no-audio -no-boot-anim -no-metrics -netdelay none -netspeed full -gpu host \
+    >"$emulator_log" 2>&1 &
+  EMULATOR_PID=$!
+
+  state_tmp="$STATE_FILE.tmp.$$"
+  "$JQ" -n --arg run_id "$RUN_ID" --arg run_dir "$RUN_DIR" --arg avd_home "$avd_home" \
+    --arg avd_name "$avd_name" --arg serial "$SERIAL" --argjson emulator_pid "$EMULATOR_PID" \
+    '{schema_version:1, run_id:$run_id, run_dir:$run_dir, avd_home:$avd_home, avd_name:$avd_name, serial:$serial, emulator_pid:$emulator_pid}' \
+    >"$state_tmp"
+  /bin/mv -- "$state_tmp" "$STATE_FILE"
+
+  wait_for_boot || fail 69 "Android emulator did not finish booting within 120 seconds"
+  require_target
+
+  local locale timezone fingerprint size os2_name os2_code chrome_name chrome_code
+  locale="$(adb_target shell getprop persist.sys.locale | /usr/bin/tr -d '\r')"
+  timezone="$(adb_target shell getprop persist.sys.timezone | /usr/bin/tr -d '\r')"
+  fingerprint="$(adb_target shell getprop ro.build.fingerprint | /usr/bin/tr -d '\r')"
+  size="$(adb_target shell wm size | /usr/bin/awk -F': ' '/Physical size/ {print $2}' | /usr/bin/tr -d '\r')"
+  os2_name="$(adb_target shell dumpsys package dk.digitalidentity.os2faktor | /usr/bin/awk -F= '/versionName=/ {print $2; exit}' | /usr/bin/tr -d '\r')"
+  os2_code="$(adb_target shell dumpsys package dk.digitalidentity.os2faktor | "$PYTHON" "$HELPER" package-version-code | /usr/bin/tr -d '\r')"
+  chrome_name="$(adb_target shell dumpsys package com.android.chrome | /usr/bin/awk -F= '/versionName=/ {print $2; exit}' | /usr/bin/tr -d '\r')"
+  chrome_code="$(adb_target shell dumpsys package com.android.chrome | "$PYTHON" "$HELPER" package-version-code | /usr/bin/tr -d '\r')"
+
+  verify_equal locale "$locale" "$($JQ -er '.android.locale' "$MANIFEST")"
+  verify_equal timezone "$timezone" "$($JQ -er '.android.timezone' "$MANIFEST")"
+  verify_equal build-fingerprint "$fingerprint" "$($JQ -er '.android.build_fingerprint' "$MANIFEST")"
+  verify_equal screen-size "$size" "$($JQ -r '.hardware.width|tostring' "$MANIFEST")x$($JQ -r '.hardware.height|tostring' "$MANIFEST")"
+  verify_equal os2faktor-version "$os2_name" "$($JQ -er '.packages.os2faktor.version_name' "$MANIFEST")"
+  verify_equal os2faktor-version-code "$os2_code" "$($JQ -er '.packages.os2faktor.version_code' "$MANIFEST")"
+  verify_equal chrome-version "$chrome_name" "$($JQ -er '.packages.chrome.version_name' "$MANIFEST")"
+  verify_equal chrome-version-code "$chrome_code" "$($JQ -er '.packages.chrome.version_code' "$MANIFEST")"
+
+  local setting demo_mode demo_state notifications status_bar_fallback
+  for setting in window_animation_scale transition_animation_scale animator_duration_scale; do
+    adb_target shell settings put global "$setting" 0
+  done
+
+  demo_mode=enabled
+  adb_target shell settings put global sysui_demo_allowed 1 || demo_mode=unsupported
+  adb_target shell am broadcast -a com.android.systemui.demo -e command enter >/dev/null || demo_mode=unsupported
+  adb_target shell am broadcast -a com.android.systemui.demo -e command clock -e hhmm 1000 >/dev/null || demo_mode=unsupported
+  adb_target shell am broadcast -a com.android.systemui.demo -e command battery -e level 100 -e plugged false >/dev/null || demo_mode=unsupported
+  adb_target shell am broadcast -a com.android.systemui.demo -e command notifications -e visible false >/dev/null || demo_mode=unsupported
+  demo_state="$(adb_target shell settings get global sysui_tuner_demo_on | /usr/bin/tr -d '\r')"
+  [[ "$demo_state" == 1 ]] || demo_mode=unsupported
+  status_bar_fallback=none
+  if [[ "$demo_mode" == unsupported ]]; then
+    status_bar_fallback=live-short-run
+    adb_target shell am broadcast -a com.android.systemui.demo -e command exit >/dev/null 2>&1 || true
+  fi
+
+  notifications="$(clear_notifications_semantically)"
+
+  BOOT_COMPLETE=1
+  trap - EXIT INT TERM
+  human "Android run ready: $RUN_ID"
+  [[ "$demo_mode" == enabled ]] || human "Warning: SystemUI demo mode is unsupported; status-bar fallback is required."
+  [[ "$notifications" != unsupported ]] || human "Warning: notification clearing is unsupported on this image."
+  log_event success
+  "$JQ" -nc --arg run_id "$RUN_ID" --arg serial "$SERIAL" --arg demo_mode "$demo_mode" \
+    --arg notifications "$notifications" --arg status_bar_fallback "$status_bar_fallback" \
+    '{ok:true, command:"boot", platform:"android", run_id:$run_id, serial:$serial, demo_mode:$demo_mode, status_bar_fallback:$status_bar_fallback, notifications:$notifications}'
+}
+
+command_dump() {
+  require_android "${1:-}"
+  shift
+  require_no_extra_args "$@"
+  require_target
+  local base
+  base="$RUN_LOG_DIR/dump-$(timestamp_id)"
+  capture_dump "$base"
+  local count
+  count="$($JQ 'length' "$base.json")"
+  human "Saved UI hierarchy and $count normalized nodes."
+  log_event success
+  "$JQ" -nc --arg xml "$base.xml" --arg nodes "$base.json" --argjson count "$count" \
+    '{ok:true, command:"dump", platform:"android", xml:$xml, nodes:$nodes, count:$count}'
+}
+
+selector_failure() {
+  local reason="$1" count="$2" xml="$3" nodes="$4"
+  diagnostic_shot selector-failure
+  human "Selector $reason. Evidence was saved without printing UI contents."
+  log_event failure
+  "$JQ" -nc --arg reason "$reason" --argjson count "$count" --arg xml "$xml" --arg nodes "$nodes" \
+    --arg screenshot "$DIAGNOSTIC_PATH" \
+    '{ok:false, command:"selector", reason:$reason, count:$count, xml:$xml, nodes:$nodes, screenshot:$screenshot}'
+}
+
+command_wait() {
+  require_android "${1:-}"
+  shift
+  [[ "$#" -eq 1 ]] || fail 64 "wait requires one selector JSON object"
+  local selector="$1"
+  require_target
+  local deadline=$(( $(/bin/date +%s) + 30 ))
+  local temporary_base="$RUN_DIR/wait-latest" match_json match_status count evidence_base
+  while (( $(/bin/date +%s) < deadline )); do
+    capture_dump "$temporary_base"
+    if match_json="$($PYTHON "$HELPER" match "$temporary_base.json" "$selector")"; then
+      evidence_base="$RUN_LOG_DIR/wait-$(timestamp_id)"
+      /bin/cp "$temporary_base.xml" "$evidence_base.xml"
+      /bin/cp "$temporary_base.json" "$evidence_base.json"
+      human "Selector appeared exactly once."
+      log_event success
+      "$JQ" -nc --arg xml "$evidence_base.xml" --arg nodes "$evidence_base.json" \
+        '{ok:true, command:"wait", platform:"android", count:1, xml:$xml, nodes:$nodes}'
+      return 0
+    else
+      match_status=$?
+      count="$(printf '%s' "$match_json" | "$JQ" -r '.count // 0')"
+      if [[ "$match_status" -eq 3 || "$match_status" -eq 64 ]]; then
+        evidence_base="$RUN_LOG_DIR/wait-failure-$(timestamp_id)"
+        /bin/cp "$temporary_base.xml" "$evidence_base.xml"
+        /bin/cp "$temporary_base.json" "$evidence_base.json"
+        selector_failure "$([[ "$match_status" -eq 3 ]] && echo ambiguous || echo invalid)" "$count" "$evidence_base.xml" "$evidence_base.json"
+        return "$match_status"
+      fi
+    fi
+    /bin/sleep 1
+  done
+  evidence_base="$RUN_LOG_DIR/wait-timeout-$(timestamp_id)"
+  /bin/cp "$temporary_base.xml" "$evidence_base.xml"
+  /bin/cp "$temporary_base.json" "$evidence_base.json"
+  selector_failure timeout 0 "$evidence_base.xml" "$evidence_base.json"
+  return 2
+}
+
+command_tap() {
+  require_android "${1:-}"
+  shift
+  [[ "$#" -eq 1 ]] || fail 64 "tap requires one selector JSON object"
+  local selector="$1"
+  require_target
+  local before after match_json match_status count reason x y
+  before="$RUN_LOG_DIR/tap-before-$(timestamp_id)"
+  capture_dump "$before"
+  if match_json="$($PYTHON "$HELPER" match "$before.json" "$selector")"; then
+    x="$(printf '%s' "$match_json" | "$JQ" -r '.matches[0].center.x')"
+    y="$(printf '%s' "$match_json" | "$JQ" -r '.matches[0].center.y')"
+  else
+    match_status=$?
+    count="$(printf '%s' "$match_json" | "$JQ" -r '.count // 0')"
+    case "$match_status" in
+      2) reason=missing ;;
+      3) reason=ambiguous ;;
+      *) reason=invalid ;;
+    esac
+    selector_failure "$reason" "$count" "$before.xml" "$before.json"
+    return "$match_status"
+  fi
+
+  adb_target shell input tap "$x" "$y"
+  after="$RUN_LOG_DIR/tap-after-$(timestamp_id)"
+  capture_dump "$after"
+  human "Tapped the center of one exact semantic match and refreshed the hierarchy."
+  log_event success
+  "$JQ" -nc --argjson x "$x" --argjson y "$y" --arg before_xml "$before.xml" \
+    --arg before_nodes "$before.json" --arg after_xml "$after.xml" --arg after_nodes "$after.json" \
+    '{ok:true, command:"tap", platform:"android", center:{x:$x,y:$y}, before:{xml:$before_xml,nodes:$before_nodes}, after:{xml:$after_xml,nodes:$after_nodes}}'
+}
+
+command_shot() {
+  require_android "${1:-}"
+  shift
+  [[ "$#" -eq 1 ]] || fail 64 "shot requires one capture ID"
+  local capture_id="$1"
+  [[ "$capture_id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || fail 64 "capture ID contains unsupported characters"
+  require_target
+  /bin/mkdir -p "$RUN_RAW_DIR"
+  local output="$RUN_RAW_DIR/$capture_id.png"
+  [[ ! -e "$output" ]] || fail 73 "capture ID already exists in this run"
+  adb_target exec-out screencap -p >"$output"
+  /bin/chmod 600 "$output"
+  local device_time dimensions sha256
+  device_time="$(adb_target shell date '+%Y-%m-%dT%H:%M:%S%z' | /usr/bin/tr -d '\r')"
+  dimensions="$($MAGICK identify -format '%wx%h' "$output")"
+  sha256="$($SHASUM -a 256 "$output" | /usr/bin/awk '{print $1}')"
+  human "Captured $capture_id at $dimensions."
+  log_event success
+  "$JQ" -nc --arg id "$capture_id" --arg path "$output" --arg dimensions "$dimensions" --arg sha256 "$sha256" \
+    --arg device_time "$device_time" \
+    '{ok:true, command:"shot", platform:"android", id:$id, path:$path, dimensions:$dimensions, sha256:$sha256, device_time:$device_time}'
+}
+
+command_kill() {
+  require_android "${1:-}"
+  shift
+  require_no_extra_args "$@"
+  ensure_runtime_dirs
+  if [[ ! -f "$STATE_FILE" ]]; then
+    "$ADB" kill-server >/dev/null 2>&1 || true
+    human "No active Android run."
+    log_event success
+    "$JQ" -nc '{ok:true, command:"kill", platform:"android", active:false}'
+    return 0
+  fi
+
+  load_state
+  local serial run_id run_dir emulator_pid deadline
+  serial="$(state_value serial)"
+  run_id="$(state_value run_id)"
+  run_dir="$(state_value run_dir)"
+  emulator_pid="$(state_value emulator_pid)"
+  adb_start
+  "$ADB" -s "$serial" emu kill >/dev/null 2>&1 || true
+  deadline=$(( $(/bin/date +%s) + 15 ))
+  while /bin/kill -0 "$emulator_pid" >/dev/null 2>&1 && (( $(/bin/date +%s) < deadline )); do
+    /bin/sleep 1
+  done
+  if /bin/kill -0 "$emulator_pid" >/dev/null 2>&1; then
+    /bin/kill "$emulator_pid" >/dev/null 2>&1 || true
+  fi
+  "$ADB" kill-server >/dev/null 2>&1 || true
+  safe_remove_run "$run_dir"
+  /bin/rm -f -- "$STATE_FILE"
+  human "Stopped Android and removed plaintext run $run_id. Raw captures and logs were retained."
+  log_event success
+  "$JQ" -nc --arg run_id "$run_id" '{ok:true, command:"kill", platform:"android", active:false, removed_run:$run_id}'
+}
+
+command_seal() {
+  require_android "${1:-}"
+  shift
+  require_no_extra_args "$@"
+  ensure_runtime_dirs
+  [[ ! -e "$STATE_FILE" ]] || fail 69 "an Android run is active"
+  [[ ! -e "$SEALED_GOLDEN" ]] || fail 73 "sealed Android golden already exists"
+
+  local source_name source_dir source_ini device avd_name temporary_archive manifest_tmp sealed_at sha256
+  source_name="$($JQ -er '.source_avd' "$MANIFEST")"
+  source_dir="$RUNTIME_ROOT/avd/$source_name.avd"
+  source_ini="$RUNTIME_ROOT/avd/$source_name.ini"
+  [[ -d "$source_dir" && -f "$source_ini" ]] || fail 66 "powered-off setup AVD is missing"
+
+  while read -r device; do
+    [[ -n "$device" ]] || continue
+    avd_name="$($ADB -s "$device" emu avd name 2>/dev/null | /usr/bin/head -1 | /usr/bin/tr -d '\r' || true)"
+    [[ "$avd_name" != "$source_name" ]] || fail 69 "setup AVD is still running"
+  done < <("$ADB" devices | /usr/bin/awk 'NR > 1 && $2 == "device" {print $1}')
+
+  temporary_archive="$SEALED_GOLDEN.tmp.$$"
+  manifest_tmp="$MANIFEST.tmp.$$"
+  trap '/bin/rm -f -- "$temporary_archive" "$manifest_tmp"' EXIT INT TERM
+  human "Encrypting the powered-off Android golden. Enter a new passphrase directly in age, then confirm it."
+  "$TAR" -c -C "$RUNTIME_ROOT/avd" -f - "$source_name.avd" "$source_name.ini" \
+    | "$ZSTD" -T0 -3 \
+    | "$AGE" -p >"$temporary_archive"
+  /bin/chmod 600 "$temporary_archive"
+  sha256="$($SHASUM -a 256 "$temporary_archive" | /usr/bin/awk '{print $1}')"
+  sealed_at="$(/bin/date -u +%Y-%m-%dT%H:%M:%SZ)"
+  "$JQ" --arg at "$sealed_at" --arg sha256 "$sha256" \
+    '.sealed.at = $at | .sealed.archive_sha256 = $sha256' "$MANIFEST" >"$manifest_tmp"
+  /bin/mv -- "$temporary_archive" "$SEALED_GOLDEN"
+  /bin/mv -- "$manifest_tmp" "$MANIFEST"
+  trap - EXIT INT TERM
+  human "Encrypted golden created and recorded in the manifest. The setup AVD remains until restore verification passes."
+  log_event success
+  "$JQ" -nc --arg archive "$SEALED_GOLDEN" --arg sealed_at "$sealed_at" --arg sha256 "$sha256" \
+    '{ok:true, command:"seal", platform:"android", archive:$archive, sealed_at:$sealed_at, sha256:$sha256}'
+}
+
+case "$COMMAND_NAME" in
+  doctor)
+    shift
+    command_doctor "$@"
+    ;;
+  boot)
+    shift
+    command_boot "$@"
+    ;;
+  dump)
+    shift
+    command_dump "$@"
+    ;;
+  wait)
+    shift
+    command_wait "$@"
+    ;;
+  tap)
+    shift
+    command_tap "$@"
+    ;;
+  shot)
+    shift
+    command_shot "$@"
+    ;;
+  kill)
+    shift
+    command_kill "$@"
+    ;;
+  seal)
+    shift
+    command_seal "$@"
+    ;;
+  help | -h | --help)
+    usage
+    ;;
+  *)
+    usage
+    fail 64 "unknown command: $COMMAND_NAME"
+    ;;
+esac

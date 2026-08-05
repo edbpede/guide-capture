@@ -1,0 +1,13 @@
+*.pyc
+__pycache__/
+
+# Credential-bearing and generated Android state must never enter this repository.
+*.age
+*.avd/
+*.keystore
+*.jks
+*.p12
+auth-state*
+current-run.json
+runtime/
+raw-captures/

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "profile": "android-phone",
+  "source_avd": "edb-phone-setup",
+  "system_image": {
+    "package": "system-images;android-36;google_apis_playstore;arm64-v8a",
+    "revision": "7"
+  },
+  "emulator": {
+    "version": "36.6.11.0",
+    "build": "15507667"
+  },
+  "adb": {
+    "version": "37.0.0",
+    "build": "14910828"
+  },
+  "hardware": {
+    "device": "pixel_7",
+    "width": 1080,
+    "height": 2400
+  },
+  "android": {
+    "build_fingerprint": "google/sdk_gphone64_arm64/emu64a:16/BE2A.250530.026.D1/13818094:user/release-keys",
+    "locale": "da-DK",
+    "timezone": "Europe/Copenhagen"
+  },
+  "packages": {
+    "os2faktor": {
+      "id": "dk.digitalidentity.os2faktor",
+      "version_name": "3.2.1",
+      "version_code": "30201"
+    },
+    "chrome": {
+      "id": "com.android.chrome",
+      "version_name": "133.0.6943.137",
+      "version_code": "694313732"
+    }
+  },
+  "status_bar": {
+    "demo_mode_supported": false,
+    "fallback": "live-short-run"
+  },
+  "sealed": {
+    "at": "2026-08-05T09:42:27Z",
+    "archive_sha256": "58b66cb108b9d585cf21181dc1e8df5b3f05d8433713a937c8f37e4467ccff32"
+  }
+}

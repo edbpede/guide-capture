@@ -1,0 +1,27 @@
+#!/bin/bash
+
+set -euo pipefail
+
+PATH="/usr/bin:/bin"
+export PATH
+
+REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+cd "$REPO_ROOT"
+
+rejected=0
+while IFS= read -r -d '' path; do
+  case "$path" in
+    *.avd/* | *.age | *.ini | *.keystore | *.jks | *.p12 | \
+      runtime/* | raw-captures/* | current-run.json | \
+      .env | .env.* | */.env | */.env.* | \
+      auth-state* | */auth-state*)
+      printf 'Refusing sensitive staged path: %s\n' "$path" >&2
+      rejected=1
+      ;;
+  esac
+done < <(git diff --cached --name-only --diff-filter=ACMR -z)
+
+if [[ "$rejected" -ne 0 ]]; then
+  printf 'Remove credential-bearing Android or authentication state from the index before committing.\n' >&2
+  exit 1
+fi
