@@ -1,152 +1,131 @@
-# CLAUDE.md
+# Guide Capture repository guidance
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guide Capture uses a Bash entry point, a Python validation/image helper, and a Node Chrome DevTools
+helper. There is no package manifest or build step. Runtime tools are resolved from fixed
+`/opt/homebrew` and macOS system paths. The wrapper must remain compatible with the macOS system
+Bash 3.2 selected by its shebang.
 
-Guide Capture drives a disposable Android emulator to produce redacted, annotated screenshots for
-documentation. It is a three-file tool (Bash + Python + Node) with no package manifest, no build
-step, and no dependency install — everything comes from Homebrew.
+## Verification
 
-## Essential Commands
-
-Run all of these from the repository root.
+Run from the repository root:
 
 ```bash
-python3 -m unittest discover -s tests -v            # full test suite (22 tests)
-python3 -m unittest tests.test_guide_capture.AnnotationPipelineTests.test_pipeline_refuses_to_overwrite_reviewed_output -v
-python3 -m unittest discover -s tests -k test_public_text -v   # filtered by substring
+/bin/bash -n bin/guide-capture bin/check-sensitive-files
 shellcheck bin/guide-capture bin/check-sensitive-files
-node --check lib/web_tap.mjs                         # syntax only; the wrapper uses /opt/homebrew/bin/node
-prek run --all-files                                 # everything the commit hooks run
-bin/guide-capture doctor                             # tool/version/permission preflight; no emulator needed
+python3 -m unittest discover -s tests -v
+node --check lib/web_tap.mjs
+prek run --all-files
+bin/guide-capture doctor
 ```
 
-`prek install --hook-type pre-commit --hook-type commit-msg` wires the hooks defined in
-`prek.toml`: builtin file checks, Gitleaks, `bin/check-sensitive-files`, shellcheck, the Python
-tests, and `node --check`. Commit messages must be Conventional Commits — the `commit-msg` hook
-rejects anything else.
+The annotation tests invoke `/opt/homebrew/bin/magick`. `prek.toml` runs the repository checks,
+Gitleaks, and the commit-message hook; commits must use Conventional Commits.
 
-The annotation tests shell out to `/opt/homebrew/bin/magick` directly, so ImageMagick must be
-installed at the Homebrew prefix for the suite to pass.
+## Architecture and contracts
 
-## Architecture Overview
+- `bin/guide-capture` is the public entry point and owns emulator, ADB, encryption, run state,
+  evidence, logging, and file permissions.
+- `lib/guide_capture.py` owns parsers, exact schema validation, protected input-script generation,
+  AVD rewriting, and the ImageMagick pipeline. Pure behavior belongs here and under unit test.
+- `lib/web_tap.mjs` performs one exact DOM click through Chrome DevTools. Its HTTPS host allowlist is
+  intentionally limited to Aula, the UniLogin broker, and Ishøj IdP.
 
-Three layers, with a deliberate split of responsibility:
+Action commands emit one JSON object on stdout for success and handled failure; human prose goes to
+stderr. `--help` prints usage to stderr. Preserve command-specific JSON fields and these exit codes:
 
-- **`bin/guide-capture`** — the only entry point. Owns every side effect: emulator lifecycle, ADB,
-  `age`/`zstd` decryption, run state, file permissions. One verb per action so each result can be
-  verified before the next runs.
-- **`lib/guide_capture.py`** — argparse subcommands (`normalize`, `match`, `open-target`,
-  `annotate`, `rewrite-avd`, `ishoj-input-script`, `os2faktor-pin-script`, …) called by the wrapper.
-  All parsing, schema validation, and the ImageMagick pipeline live here. This is the layer under
-  unit test.
-- **`lib/web_tap.mjs`** — Chrome DevTools Protocol click for pages where UIAutomator only exposes a
-  WebView. Hard-coded HTTPS host allowlist (`aula.dk`, `www.aula.dk`, `broker.unilogin.dk`,
-  `login-idp.ishoj.dk`); aborts on zero or multiple visible matches.
+| Code | Meaning |
+|---:|---|
+| `0` | Success, including idempotent `kill` with no active run |
+| `1` | `doctor` completed with one or more failed checks |
+| `2` | Selector missing or wait timed out |
+| `3` | Selector ambiguous |
+| `64` | Invalid arguments, selector, or specification |
+| `65` | Invalid data, profile, run state, or annotation input |
+| `66` | Required input or Android package missing |
+| `69` | Tool/device unavailable or resulting state could not be verified |
+| `70` | Internal path-safety refusal |
+| `73` | Existing capture, reviewed output, or sealed archive would be overwritten |
 
-**Output contract.** Every wrapper command prints exactly one JSON object on stdout and all human
-prose on stderr via `human()`. Exit codes carry meaning and callers depend on them: `64` bad
-arguments or spec, `65` invalid data/state, `66` missing input, `69` unavailable or verification
-failed, `73` refusing to overwrite. Selector matching uses `0` = exactly one match, `2` = none,
-`3` = ambiguous. Preserve both the JSON shape and the exit code when editing a command.
+`private/runtime/current-run.json` is the single active-run lock. Its exact schema, run directory,
+AVD directory, serial, and positive emulator PID are validated before use. The dedicated ADB server
+uses port `5038`; the only accepted target is `emulator-5556`. `kill` removes the state and decrypted
+AVD but retains raw captures and logs.
 
-**Run state.** `private/runtime/current-run.json` (`schema_version: 1`) is the single active-run
-lock. `boot` refuses to start when it exists; `kill` removes it and destroys the plaintext AVD.
-`require_target()` then asserts exactly one device on the dedicated ADB server (port 5038, emulator
-port 5556) whose serial matches the recorded run — this is why the tool never touches a developer's
-default ADB server.
+`profiles/android-phone.json` is the environment pin. Its exact schema is validated before `boot`
+or `seal`. The wrapper derives the system-image path, Android target, package IDs, status-bar
+expectation, and all version comparisons from it. `doctor` also checks the system-image revision,
+emulator/ADB versions, sealed archive hash, runtime permissions, and annotation font. Treat profile
+edits as deliberate re-pinning.
 
-**`profiles/android-phone.json` is the environment pin.** `boot` reads locale, timezone, build
-fingerprint, screen size, and OS2faktor/Chrome version names and codes from it and aborts on any
-mismatch; `doctor` additionally compares emulator/adb versions and the sealed archive's SHA-256.
-`seal` writes `sealed.at` and `sealed.archive_sha256` back into the manifest. Editing this file
-re-pins what the tool will accept, so treat it as a deliberate change, not a fix for a failing check.
+Everything sensitive or generated during a run belongs beneath `private/`, overridden only by
+`GUIDE_CAPTURE_PRIVATE`. The default tree is gitignored and mode-restricted. The tool never
+publishes into a guides repository.
 
-**Everything private lives under `private/`** (override with `GUIDE_CAPTURE_PRIVATE`), created mode
-700: `.env`, `runtime/` (raw captures, UI dumps, logs, sealed golden), and `reviewed-output/`. The
-whole directory is gitignored. `GUIDE_CAPTURE_GUIDES` points at the separate guides repository
-(default `../guides`); this tool never publishes into it.
+## Change boundaries
 
-## Project Boundaries
-
-| Change | Belongs in |
+| Change | Location |
 |---|---|
-| Parsing, validation, image transformation, anything testable | `lib/guide_capture.py` + a case in `tests/test_guide_capture.py` |
-| New device action, ADB interaction, run lifecycle | `bin/guide-capture` (add `command_*`, a `usage()` line, and a `case` arm) |
-| DOM-level click behaviour or host allowlist | `lib/web_tap.mjs` |
-| Emulator/image/package versions | `profiles/android-phone.json` |
-| Capture step definitions | `specs/<slug>.<platform>.json` — `annotate` rejects a spec outside `specs/` |
-| Agent operating procedure for a capture run | `skills/guide-capture/SKILL.md` |
+| Parsing, validation, protected-input preparation, image processing | `lib/guide_capture.py` and `tests/test_guide_capture.py` |
+| Device action, ADB interaction, run lifecycle, command JSON | `bin/guide-capture` |
+| DOM click behavior or approved host allowlist | `lib/web_tap.mjs` |
+| Emulator, image, package, and status-bar pins | `profiles/android-phone.json` |
+| Guide capture steps and image bounds | `specs/<slug>.<platform>.json` |
+| Agent capture procedure | `skills/guide-capture/SKILL.md` |
+| Privacy and highlight review criteria | `skills/guide-capture/references/annotation-redaction.md` |
 
-`examples/` is a frozen worked output set kept as README evidence; regenerate it only deliberately.
-`docs/` records phase decisions, not current API — the code is authoritative when they disagree.
+The tracked `examples/` set is frozen README evidence; regenerate it only deliberately. Current
+behavior comes from code and tests. Documentation should explain operator decisions or rationale,
+not duplicate executable implementation details.
 
-## Common Change Workflows
+## Change patterns
 
-**Adding a spec field** (spec keys are exact-matched, so a new key is rejected until every step is
-done):
+When adding a specification field:
 
-1. Add the key to the relevant `_require_exact_keys(...)` required/optional set in
-   `validate_annotation_spec`, plus a `_validate_*` call.
-2. Consume it in `_magick_annotation_command` (or `_validate_coordinates` for anything
-   coordinate-bearing — bounds are checked against real image dimensions *before* any output is
-   written).
-3. Extend the report entry in `process_annotation_spec` if it should be auditable.
-4. Add a rejection test and a behaviour test in `tests/test_guide_capture.py`.
+1. Add it to the exact-key schema and validate its type/value in `validate_annotation_spec`.
+2. Consume it in `_magick_annotation_command`, `_validate_coordinates`, or the report as needed.
+3. Add one rejection test and one behavior test.
 
-**Adding a wrapper command:** write the pure logic as a `lib/guide_capture.py` subparser, add
-`command_<name>` in `bin/guide-capture` that calls `require_target`, captures fresh evidence via
-`capture_dump`, emits one `jq -nc` JSON object, calls `log_event`, and register it in both `usage()`
-and the bottom `case`. Verify the resulting UI state — never treat exit 0 as proof.
+When adding a device command:
 
-**Adding a credentialed flow:** read values through `read_protected_env_values` (it enforces mode
-`600` on the env file), build a newline-separated `input …` script in Python, pipe it into
-`adb shell` (see `command_login_ishoj`), and delete the credential-bearing dumps in a `trap` before
-returning. Document the variable in `.env.example`. Secrets must never reach `argv`, logs, or a
-screenshot.
+1. Put testable parsing or validation in the Python helper.
+2. Add `command_<name>` in the wrapper, using `require_target` and fresh evidence where applicable.
+3. Emit exactly one JSON result, log only command/outcome, and add the usage and `case` entries.
+4. Verify the resulting UI state; process exit zero alone is not evidence.
 
-## Implementation Decisions
+When adding a credentialed flow, use `read_protected_env_values`, build a newline-separated device
+script in Python, pipe it to `adb shell`, and remove credential-bearing dumps with a trap. Document
+the variable in `.env.example` and update the authorization contract. Never put a resolved secret
+in arguments, logs, output, specifications, or screenshots.
 
-| Situation | Use | Avoid |
+## Operating decisions
+
+| Situation | Use | Do not use |
 |---|---|---|
-| Tapping a native Android control | `tap android '<selector>'` with one exact `text`/`content_desc`/`resource_id` | Coordinates, or any selector that matches 0 or >1 enabled node |
-| Control only visible as DOM inside Chrome | `web-tap android '<exact visible text>'` | `tap` on the WebView, or widening the `web_tap.mjs` allowlist for a one-off |
-| Entering a short non-secret search token | `type-public` — requires an empty, non-password `android.widget.EditText` with a stable resource ID | `type-public` for an email, username, PIN, or code, even when it passes the ASCII filter |
-| Entering the authorized Ishøj/OS2faktor secrets | `login-ishoj android`, `unlock-os2faktor android` | Any generic text command; anything that puts the value in `argv` |
-| Correcting redaction/annotation bounds after review | `annotate <spec.json> <retained-run-id>` (offline) | Rebooting the emulator, or hand-running ImageMagick |
+| Native Android control | `tap android '<selector>'` with one exact semantic field | Coordinates or non-unique selectors |
+| Approved WebView control | `web-tap android '<exact visible text>'` | Tapping the WebView node or widening the allowlist for one run |
+| Short public search token | `type-public` on one empty, non-password field | Email, username, PIN, code, identifier, or token |
+| Authorized Ishøj credentials | `login-ishoj android` | Generic text entry or secret arguments |
+| Authorized OS2faktor PIN | `unlock-os2faktor android` | Generic text entry or secret arguments |
+| Offline redaction/highlight correction | `annotate <spec> <retained-run-id>` | Rebooting or invoking ImageMagick directly |
 
-## Critical Gotchas
+## Gotchas
 
-- **`boot` fails while a run is recorded.** `an Android run is already active` means
-  `private/runtime/current-run.json` exists — run `bin/guide-capture kill android` first. Always
-  `kill` after errors and interruptions; it destroys the decrypted AVD.
-- **`annotate` never overwrites.** It aborts if `private/reviewed-output/<slug>/annotation-report.json`
-  or any per-step PNG exists. Archive the rejected directory under `private/runtime/` and rerun with
-  the retained run ID.
-- **A Homebrew upgrade of `emulator` or `adb` breaks `doctor`.** That is the pin working. Re-verify
-  the environment and update `profiles/android-phone.json` intentionally rather than bypassing boot.
-- **The wrapper resolves tools from absolute Homebrew paths** (`/opt/homebrew/bin/...`,
-  `/usr/bin/jq`) and overwrites `PATH`. A non-standard prefix needs the constants at the top of
-  `bin/guide-capture` changed; do not switch to bare command names.
-- **Annotation reports must stay path-relative.** `_report_path` renders paths against the raw and
-  reviewed roots because the report ships beside published screenshots; an absolute path would leak
-  the operator's home directory. `test_report_records_relative_paths_only` guards this.
-- **`annotate`'s out-of-scope error text says `automation/specs`** while the enforced directory is
-  `<repo>/specs`. The code is correct; the message is stale.
+- `boot` refuses to run while `private/runtime/current-run.json` exists. Always run `kill android`
+  after errors and interruptions.
+- Run `validate <spec>` before boot; `annotate` is intentionally too late to be the first schema
+  check.
+- `annotate` returns `73` if a per-guide report or PNG already exists. Archive the rejected
+  reviewed-output directory beneath `private/runtime/` before rerunning the exact retained run.
+- Homebrew upgrades to the pinned emulator or ADB make `doctor` fail by design. Verify and re-pin;
+  do not bypass the check.
+- Annotation report paths must remain relative. Absolute paths expose the operator's home directory.
+- The wrapper assumes `/opt/homebrew`; changing prefixes requires updating its path constants.
 
-## Additional Documentation
+## Required references
 
-* `skills/guide-capture/SKILL.md` — Read in full before running or modifying any capture flow; it is
-  the binding operating procedure (selector discipline, secret handling, shutdown, completion
-  checklist).
-* `skills/guide-capture/references/annotation-redaction.md` — Read before touching redaction or
-  highlight bounds, or before reviewing staged images; defines the separate privacy-fit and
-  target-fit passes.
-* `docs/login-flow-ishoj.md` — Read before working on `login-ishoj` or `unlock-os2faktor`; records
-  the standing credential authorization and its exact scope.
-* `docs/phase-2-image-pipeline.md` — Read when changing the annotate command's inputs, output
-  layout, or report contract.
-* `docs/phase-3-capture-skill.md` — Read when changing `open`, `wait`, `tap`, `web-tap`, or
-  `type-public` verification behaviour.
-* `docs/status-bar-fallback.md` — Read when screenshots disagree on clock or status-bar state;
-  explains the `live-short-run` fallback and why demo mode reports unsupported.
-* `README.md` — Read for the Homebrew requirements list and first-time setup.
+- Read `skills/guide-capture/SKILL.md` before running or modifying a capture flow.
+- Read `skills/guide-capture/references/annotation-redaction.md` before editing bounds or reviewing
+  images.
+- Read `docs/login-flow-ishoj.md` before changing or using protected login commands.
+- Read `docs/status-bar-fallback.md` when the live status bar differs between captures.
+- Read `README.md` for supported setup and the public workflow.

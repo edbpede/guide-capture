@@ -54,5 +54,6 @@ Perform these passes independently on every image:
 4. **Guide consistency check:** compare all reviewed images for consistent margin, numbering,
    legibility, and target semantics.
 
-Archive a rejected reviewed-output directory beneath `private/runtime/`, adjust the specification, rerun the
-exact retained run, and repeat all four passes. Approval applies only to the latest regenerated set.
+Archive a rejected reviewed-output directory beneath `private/runtime/`, adjust the specification,
+rerun the exact retained run, and repeat all four passes. Approval applies only to the latest
+regenerated set.

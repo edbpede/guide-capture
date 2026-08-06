@@ -4,7 +4,7 @@ The Android 36 Google Play image accepts SystemUI demo broadcasts but leaves
 `sysui_tuner_demo_on=0`; visual verification also shows the live clock. The wrapper therefore
 reports demo mode as unsupported instead of claiming that the status bar is pinned.
 
-Phase 1 uses one explicit fallback named `live-short-run`:
+The pinned profile uses one explicit fallback named `live-short-run`:
 
 1. Keep each guide capture in one short emulator run.
 2. Clear notifications semantically before capture.

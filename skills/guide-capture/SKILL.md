@@ -5,168 +5,153 @@ description: Capture, verify, redact, annotate, and stage reproducible Android s
 
 # Guide Capture
 
-Use the stable wrapper to run one short, disposable Android capture session. Treat every raw image,
-UI dump, authentication screen, and enrolled emulator as sensitive.
+Run one short disposable Android capture session from the repository root. Treat the AVD, UI dumps,
+raw screenshots, authentication screens, and working output as sensitive.
 
-## Locations
-
-All paths below are relative to the repository root. Resolve them against the checkout you are
-working in; do not hardcode an absolute path.
+## Paths
 
 - Wrapper: `bin/guide-capture`
 - Specifications: `specs/`
+- Raw evidence: `private/runtime/raw-captures/` and `private/runtime/logs/`
 - Reviewed output: `private/reviewed-output/`
-- Credential source: `private/.env`
+- Protected values: `private/.env`
 
-Everything under `private/` is gitignored and never published. Set `GUIDE_CAPTURE_PRIVATE` to
-relocate that directory. The separate guides repository defaults to `../guides`; set
-`GUIDE_CAPTURE_GUIDES` when it lives elsewhere.
+`GUIDE_CAPTURE_PRIVATE` may relocate the private tree. Never load, quote, or repeat resolved values
+from `.env`.
 
-Read the target MDX and JSON specification before booting. For an Ishøj education-service login,
-also read `docs/login-flow-ishoj.md`. Do not load or repeat secret values from `private/.env`.
+## Invariants
 
-## Non-negotiable rules
-
-- Call `guide-capture` only. Never call raw `adb`, `emulator`, `age`, or ImageMagick commands.
-- Never pass passwords, PINs, one-time codes, enrollment secrets, or token-bearing URLs as arguments.
-- Never type a secret with generic UI or shell commands. The sole project-specific exception is
-  `login-ishoj android` for `I_ACC_EMAIL` and `I_ACC_PASS`, plus `unlock-os2faktor android` for
-  `OS2FAKTOR_PIN`, from `private/.env`. The credential authorization contract is recorded in
-  `docs/login-flow-ishoj.md`; do not request per-run confirmation while its file, variables,
-  destination allowlist, and purpose remain unchanged.
-- Use exact `text`, `content_desc`, or `resource_id` selectors from fresh UI dumps.
-- If Chrome renders an approved Aula or authentication page but UIAutomator exposes only a WebView,
-  `web-tap android '<exact-visible-text>'` may click one exact visible DOM control. It searches only
-  the fixed Aula, UniLogin broker, and Ishøj IdP host allowlist and stops on zero or multiple matches.
-- Never invent device coordinates. Stop on zero or multiple selector matches.
+- Use `bin/guide-capture` for every emulator, ADB, encryption, selector, screenshot, and image action.
+  Never invoke `adb`, `emulator`, `age`, or ImageMagick directly.
+- Never pass a password, PIN, one-time code, enrollment secret, personal identifier, or token-bearing
+  URL as an argument.
+- Generic UI input is not authorized for secrets. The only standing exceptions are
+  `login-ishoj android` for `I_ACC_EMAIL`/`I_ACC_PASS` and `unlock-os2faktor android` for
+  `OS2FAKTOR_PIN`, read from `.env` under `docs/login-flow-ishoj.md`.
+- Use one exact `text`, `content_desc`, or `resource_id` selector from fresh private evidence. Stop
+  on zero or multiple enabled matches; never invent device coordinates.
+- Use `web-tap` only when an approved Aula/UniLogin/Ishøj HTTPS page is visible and UIAutomator
+  exposes only a WebView. It must find one exact visible DOM control on the fixed host allowlist.
+- Treat non-Danish application or browser UI as a failed capture.
 - Never bypass secure-window, integrity, attestation, or emulator-detection controls.
-- Never publish raw captures. Copy only owner-approved, redacted output into the guides repository.
-- Treat non-Danish app or browser UI as a failed capture.
-- Always run `kill android`, including after errors, interruptions, or skipped steps.
-- Treat command success as provisional until the expected UI state and output file are verified.
+- Never publish raw evidence. Only owner-approved reviewed PNGs may enter a guides repository.
+- Always run `kill android`, including after failure, interruption, or skipped work.
+- Treat command success as provisional until its evidence shows the intended state.
 
-Image redaction and annotation bounds declared in the JSON specification are allowed. They are
-offline image regions, not device-input coordinates.
+Specification redaction/highlight bounds are offline image coordinates. They are allowed and must
+never be reused as device-input coordinates.
 
-## Workflow
+## Procedure
 
 ### 1. Prepare
 
-1. Read the target guide and specification.
-2. If the specification is missing, create it from the requested guide scope before booting. Include
-   each requested capture step and an explicit `redact` array, including `[]`; leave selectors and
-   annotation bounds absent until fresh evidence exists.
-3. Do not reduce the capture set merely because an existing guide step has no screenshot or uses an
-   inline crop.
-4. Run `guide-capture doctor`.
-5. Stop and report every failing doctor check. Do not boot around version or golden drift.
+1. Read the requested guide and its Android specification. For Ishøj or OS2faktor authentication,
+   also read `docs/login-flow-ishoj.md`.
+2. If the specification is missing, create only the requested capture steps. Every step must have
+   `redact`, including `[]`; add selectors and image bounds only after fresh evidence exists.
+3. Run `bin/guide-capture validate <spec.json>` and correct every schema error before booting.
+4. Run `bin/guide-capture doctor`. Do not boot unless every check passes.
 
 ### 2. Boot and open
 
-1. Run `guide-capture boot android`.
-2. When `age` requests its passphrase, ask the owner to enter it directly in Terminal. Do not ask
-   them to paste it into chat.
-3. Run `guide-capture open android <start.value>` using the specification's HTTPS URL or package.
-4. Verify the returned foreground package and saved post-open UI evidence.
-5. Record the boot result's demo-mode or documented status-bar fallback for review consistency.
+1. Run `bin/guide-capture boot android`.
+2. If `age` requests its passphrase, ask the owner to enter it directly in Terminal, never in chat.
+3. Run `bin/guide-capture open android <start.value>` using the specification's credential-free
+   HTTPS URL or package name.
+4. Verify the returned foreground package and post-open hierarchy. Retain the reported demo-mode or
+   status-bar fallback for the consistency review. If notification clearing is unsupported,
+   visually confirm that no notification indicator enters a capture.
 
-Do not place session tokens, credentials, or redirect URLs containing secrets in `start.value`.
+### 3. Capture
 
-### 3. Capture each step
+For a native step with `find`:
 
-Use this sequence for a step with `find`:
+1. Run `bin/guide-capture wait android '<find-selector>'` and inspect its returned node evidence to
+   confirm the unique match is the intended control.
+2. Run `bin/guide-capture shot android <step-id>` before acting.
+3. Run `bin/guide-capture tap android '<find-selector>'`; it re-dumps before tapping and returns
+   before/after evidence.
+4. When `expect_after` exists, run `wait` for it. Otherwise inspect the tap's `after` hierarchy.
 
-1. Run `wait android '<find-selector>'`.
-2. Run `dump android` and inspect the fresh hierarchy evidence.
-3. Confirm exactly one visible, enabled match.
-4. Run `shot android <step-id>` before the action so the screenshot shows what to select.
-5. Run `tap android '<find-selector>'`.
-6. Run `wait android '<expect_after-selector>'` when `expect_after` exists.
-7. Inspect the refreshed hierarchy and confirm the intended state, not merely a zero exit code.
+When UIAutomator exposes only a WebView, inspect the visible page, take the step screenshot, then run
+`bin/guide-capture web-tap android '<exact-visible-text>'` and verify its post-action hierarchy.
 
-For a declared non-secret search token, `type-public android '<resource-id-selector>' <token>` may
-be used only when the fresh hierarchy exposes one empty, non-password `android.widget.EditText`
-with a stable resource ID. The token is deliberately limited to 1-64 ASCII letters, digits, dots,
-underscores, or hyphens. Use the shortest public prefix that produces the intended exact result;
-for example, type `Ish` and then select the visible exact Danish result `Ishøj Kommune`. Never use
-`type-public` for an email address, username, password, PIN, one-time code, personal identifier, or
-token, even if it would pass the character restrictions.
+For a capture-only step without `find`, run `dump`, verify the intended state, and run `shot`. Do not
+manufacture an action.
 
-Use `back android` only after visual or hierarchy evidence confirms a transient Android or keyboard
-overlay that should be dismissed. It sends Back exactly once and saves before/after evidence; do
-not use it speculatively for webpage navigation.
+`bin/guide-capture type-public android '<resource-id-selector>' <token>` is limited to a 1–64
+character public ASCII search token and one verified empty, non-password
+`android.widget.EditText`. Use the shortest prefix that produces the intended exact Danish result.
+Never use it for an email, username, PIN, code, personal identifier, or token even if the characters
+pass validation.
 
-Use `notifications android` when a verified OS2faktor request is pending and the application has no
-launcher activity. Inspect the private hierarchy, then tap only one exact OS2faktor notification.
+Use `bin/guide-capture back android` only to dismiss a verified transient Android or keyboard
+overlay. It sends Back once; do not use it speculatively for webpage navigation.
 
-For a capture-only step without `find`, dump and verify the intended state, then take the shot. Do
-not manufacture an action.
+When a verified OS2faktor request is pending:
 
-For the explicitly authorized Ishøj IdP account login, run `login-ishoj android` only on the
-verified blank Ishøj form. Confirm that it reports `sensitive_evidence_retained:false`.
+1. Run `bin/guide-capture notifications android`, inspect its private hierarchy, and use
+   `bin/guide-capture tap` on one exact OS2faktor notification.
+2. Verify the `Angiv pinkode` screen, then run `bin/guide-capture unlock-os2faktor android`.
+3. Confirm `sensitive_evidence_retained:false`, verify the application and browser control codes
+   match, and approve only the matching request with one exact selector.
 
-If any other login, PIN, MitID, OS2faktor, or enrollment secret is required:
+Run `bin/guide-capture login-ishoj android` only on the verified blank Ishøj form and require
+`sensitive_evidence_retained:false`.
 
-1. Stop before entering it.
-2. Tell the owner which visible emulator field or button needs attention.
-3. Ask them to enter the secret directly in the emulator and reply when finished.
-4. Re-dump the UI and verify the resulting state before continuing.
+Outside the standing Ishøj/OS2faktor authorization, stop before any secret entry. Ask the owner to
+enter the value directly in the emulator, then re-dump and verify the resulting state. Never capture
+a screen after a secret has been visibly entered.
 
-Do not capture a screen after a secret has been visibly entered. If the hierarchy is missing,
-ambiguous, or inconsistent with the specification, preserve the wrapper's evidence and mark the
-step failed instead of guessing.
+If evidence is missing, ambiguous, non-Danish, or inconsistent with the requested flow, preserve the
+wrapper's private evidence and mark the step failed. Do not rename an enrolled device or alter state
+merely to force Android to match another platform's prose.
 
-If observed Android wording differs from Chromebook prose, record the Android wording for later
-platform-specific integration. Do not rename an enrolled device or force the UI to match another
-platform without owner approval.
+### 4. Redact, annotate, and shut down
 
-### 4. Redact and annotate
+1. Inspect every raw PNG at full resolution for names, usernames, email addresses, avatars, device
+   IDs, notification contents, tokens, and student information.
+2. Read `skills/guide-capture/references/annotation-redaction.md` and perform its raw privacy
+   inventory before declaring any `redact: []` safe.
+3. Record every opaque redaction with a reason. Record a tight numbered highlight and optional arrow
+   only where instructionally useful.
+4. Run `bin/guide-capture annotate <spec.json>`.
+5. Verify the report has one input/output hash record per captured step and
+   `human_review_required:true`.
+6. Run `bin/guide-capture kill android` before waiting for review.
 
-1. Inspect every raw screenshot locally for names, usernames, email addresses, avatars, device IDs,
-   notification contents, tokens, and student information.
-2. Read `references/annotation-redaction.md` and apply its separate privacy-fit and target-fit
-   checks at full image resolution.
-3. Record every required opaque redaction region and reason in the specification. Keep `redact: []`
-   only after an explicit inspection finds nothing sensitive.
-4. Record the numbered highlight and optional arrow bounds in `annotate` where needed. Fit each
-   highlight tightly to the actual visible or clickable target with only a small stroke-safe margin;
-   exclude unrelated layout and empty surrounding space.
-5. Run `guide-capture annotate <spec.json>` while the run is active.
-6. Confirm the JSON report contains an input/output hash for every expected step and
-   `human_review_required: true`.
-7. Run `guide-capture kill android` before waiting for review.
+If annotation fails, still kill the run. Never reproduce the image pipeline manually.
 
-If review requires annotation or redaction corrections after shutdown, archive the rejected
-reviewed-output directory beneath `private/runtime/`, update the specification, and run
-`guide-capture annotate <spec.json> <retained-run-id>`. Supply the exact reviewed run ID; never
-select or infer a retained run automatically, and do not reboot solely for offline image changes.
+For offline corrections, archive the rejected `private/reviewed-output/<slug>/` directory beneath
+`private/runtime/`, update the specification, and run:
 
-If annotation fails, still run `kill android`. Do not manually reproduce the wrapper's image
-pipeline or overwrite an older reviewed result.
+```bash
+bin/guide-capture annotate <spec.json> <retained-run-id>
+```
+
+Use the exact reviewed run ID. Never infer a retained run or reboot only to adjust image bounds.
 
 ### 5. Review and publish
 
-1. Open every staged Android PNG and inspect it at full resolution.
-2. Run the independent privacy-fit and target-fit review passes in
-   `references/annotation-redaction.md`. Confirm Danish UI text is legible, the status bar is
-   consistent, and any prose difference is recorded.
-3. Show the staged images to the owner and request explicit approval.
-4. Only after approval, copy the PNGs into the matching directory under `guides/public/screens/`.
-5. Never copy `annotation-report.json`, raw PNGs, XML, UI-node JSON, emulator logs, or run state.
-6. Report each requested step as `captured`, `skipped`, or `failed`, with its evidence or reviewed
+1. Inspect every staged PNG at full resolution using all four passes in
+   `skills/guide-capture/references/annotation-redaction.md`.
+2. Confirm all UI is legible Danish, status bars are acceptably consistent, and wording differences
+   from other platforms are reported.
+3. Show the staged images to the owner and obtain explicit approval.
+4. Copy only approved PNGs into the matching guides `public/screens/` directory. Never copy the
+   report, raw PNGs, XML, normalized nodes, logs, or run state.
+5. Report each requested step as `captured`, `skipped`, or `failed`, with its evidence or reviewed
    output path.
 
-Do not edit the guide's platform switching or publish assets unless the user's task includes that
-work. Publishing and frontend integration remain separate reviewable changes.
+Do not edit guide integration or publish assets unless the user's task includes that work.
 
-## Completion checklist
+## Completion
 
 - `doctor` passed before boot.
 - The start target and every action were semantically verified.
-- Secrets were entered only by the owner or a dedicated owner-authorized protected command and
-  never appeared in arguments or output.
-- Every requested raw capture has a corresponding hash-tracked reviewed PNG.
-- Every redaction decision is explicit.
-- The emulator and dedicated ADB server were stopped and the plaintext run was destroyed.
-- No reviewed image entered the guides repository without owner approval.
-- The final report lists captured, skipped, and failed steps with evidence paths.
+- Secrets used only owner entry or the two authorized protected commands and never entered retained
+  evidence, arguments, logs, or output.
+- Every captured step has one hash-tracked reviewed PNG and an explicit redaction decision.
+- The emulator, dedicated ADB server, and decrypted run were destroyed.
+- No reviewed image was published without owner approval.
+- The final report accounts for every requested step and includes evidence paths.

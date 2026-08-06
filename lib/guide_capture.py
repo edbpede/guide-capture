@@ -26,6 +26,9 @@ PUBLIC_TEXT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 STEP_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 PACKAGE_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
+AVD_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+SYSTEM_IMAGE_RE = re.compile(r"^system-images;android-[0-9]+;[a-z0-9_]+;[a-z0-9_-]+$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 FOREGROUND_MARKERS = ("mResumedActivity", "topResumedActivity")
 FOREGROUND_PACKAGE_RE = re.compile(r"(?:\bu\d+\s+)?([A-Za-z][A-Za-z0-9_.]*)/[A-Za-z0-9_.$]+")
 COVER_COLOR = "#20242B"
@@ -43,6 +46,14 @@ class AnnotationSpecError(ValueError):
 
 class AnnotationProcessingError(RuntimeError):
     """Raised when an image cannot be inspected or transformed."""
+
+
+class AnnotationCollisionError(AnnotationProcessingError):
+    """Raised when annotation would replace an existing reviewed artefact."""
+
+
+class ProfileSpecError(ValueError):
+    """Raised when the pinned Android profile is incomplete or malformed."""
 
 
 def parse_bounds(raw: str) -> tuple[list[int], dict[str, int]] | None:
@@ -235,6 +246,148 @@ def parse_foreground_package(output: str) -> str:
     raise ValueError("foreground package was not reported")
 
 
+def validate_profile(value: object) -> dict[str, object]:
+    def require_object(raw: object, location: str) -> dict[str, object]:
+        if not isinstance(raw, dict):
+            raise ProfileSpecError(f"{location} must be an object")
+        return raw
+
+    def require_keys(raw: dict[str, object], location: str, expected: set[str]) -> None:
+        missing = expected - set(raw)
+        unknown = set(raw) - expected
+        if missing:
+            raise ProfileSpecError(f"{location} is missing required key: {sorted(missing)[0]}")
+        if unknown:
+            raise ProfileSpecError(f"{location} contains unsupported key: {sorted(unknown)[0]}")
+
+    def require_string(raw: object, location: str) -> str:
+        if not isinstance(raw, str) or not raw:
+            raise ProfileSpecError(f"{location} must be a non-empty string")
+        return raw
+
+    profile = require_object(value, "profile")
+    require_keys(
+        profile,
+        "profile",
+        {
+            "schema_version",
+            "profile",
+            "source_avd",
+            "system_image",
+            "emulator",
+            "adb",
+            "hardware",
+            "android",
+            "packages",
+            "status_bar",
+            "sealed",
+        },
+    )
+    if (
+        not isinstance(profile["schema_version"], int)
+        or isinstance(profile["schema_version"], bool)
+        or profile["schema_version"] != 1
+    ):
+        raise ProfileSpecError("profile.schema_version must be 1")
+    if profile["profile"] != "android-phone":
+        raise ProfileSpecError("profile.profile must be android-phone")
+    source_avd = require_string(profile["source_avd"], "profile.source_avd")
+    if not AVD_NAME_RE.fullmatch(source_avd):
+        raise ProfileSpecError("profile.source_avd contains unsupported characters")
+
+    system_image = require_object(profile["system_image"], "profile.system_image")
+    require_keys(system_image, "profile.system_image", {"package", "revision"})
+    image_package = require_string(system_image["package"], "profile.system_image.package")
+    if not SYSTEM_IMAGE_RE.fullmatch(image_package):
+        raise ProfileSpecError("profile.system_image.package is invalid")
+    if not require_string(system_image["revision"], "profile.system_image.revision").isdigit():
+        raise ProfileSpecError("profile.system_image.revision must contain digits")
+
+    for tool_name in ("emulator", "adb"):
+        tool = require_object(profile[tool_name], f"profile.{tool_name}")
+        require_keys(tool, f"profile.{tool_name}", {"version", "build"})
+        require_string(tool["version"], f"profile.{tool_name}.version")
+        if not require_string(tool["build"], f"profile.{tool_name}.build").isdigit():
+            raise ProfileSpecError(f"profile.{tool_name}.build must contain digits")
+
+    hardware = require_object(profile["hardware"], "profile.hardware")
+    require_keys(hardware, "profile.hardware", {"device", "width", "height"})
+    require_string(hardware["device"], "profile.hardware.device")
+    for dimension in ("width", "height"):
+        raw_dimension = hardware[dimension]
+        if (
+            not isinstance(raw_dimension, int)
+            or isinstance(raw_dimension, bool)
+            or raw_dimension <= 0
+        ):
+            raise ProfileSpecError(f"profile.hardware.{dimension} must be a positive integer")
+
+    android = require_object(profile["android"], "profile.android")
+    require_keys(android, "profile.android", {"build_fingerprint", "locale", "timezone"})
+    for key in ("build_fingerprint", "locale", "timezone"):
+        require_string(android[key], f"profile.android.{key}")
+
+    packages = require_object(profile["packages"], "profile.packages")
+    require_keys(packages, "profile.packages", {"os2faktor", "chrome"})
+    for package_name in ("os2faktor", "chrome"):
+        package = require_object(packages[package_name], f"profile.packages.{package_name}")
+        require_keys(
+            package,
+            f"profile.packages.{package_name}",
+            {"id", "version_name", "version_code"},
+        )
+        package_id = require_string(package["id"], f"profile.packages.{package_name}.id")
+        if not PACKAGE_RE.fullmatch(package_id):
+            raise ProfileSpecError(f"profile.packages.{package_name}.id is invalid")
+        require_string(package["version_name"], f"profile.packages.{package_name}.version_name")
+        version_code = require_string(
+            package["version_code"], f"profile.packages.{package_name}.version_code"
+        )
+        if not version_code.isdigit():
+            raise ProfileSpecError(
+                f"profile.packages.{package_name}.version_code must contain digits"
+            )
+
+    status_bar = require_object(profile["status_bar"], "profile.status_bar")
+    require_keys(status_bar, "profile.status_bar", {"demo_mode_supported", "fallback"})
+    if not isinstance(status_bar["demo_mode_supported"], bool):
+        raise ProfileSpecError("profile.status_bar.demo_mode_supported must be a boolean")
+    expected_fallback = "none" if status_bar["demo_mode_supported"] else "live-short-run"
+    if status_bar["fallback"] != expected_fallback:
+        raise ProfileSpecError(
+            f"profile.status_bar.fallback must be {expected_fallback} for the pinned demo-mode state"
+        )
+
+    sealed = require_object(profile["sealed"], "profile.sealed")
+    require_keys(sealed, "profile.sealed", {"at", "archive_sha256"})
+    sealed_at = sealed["at"]
+    sealed_hash = sealed["archive_sha256"]
+    if not isinstance(sealed_at, str) or not isinstance(sealed_hash, str):
+        raise ProfileSpecError("profile.sealed values must be strings")
+    if bool(sealed_at) != bool(sealed_hash):
+        raise ProfileSpecError("profile.sealed values must both be empty or both be populated")
+    if sealed_at:
+        try:
+            parsed_timestamp = datetime.strptime(sealed_at, "%Y-%m-%dT%H:%M:%SZ")
+        except ValueError as error:
+            raise ProfileSpecError("profile.sealed.at is not a valid UTC timestamp") from error
+        if parsed_timestamp.strftime("%Y-%m-%dT%H:%M:%SZ") != sealed_at:
+            raise ProfileSpecError("profile.sealed.at is not a canonical UTC timestamp")
+        if not SHA256_RE.fullmatch(sealed_hash):
+            raise ProfileSpecError("profile.sealed.archive_sha256 is invalid")
+    return profile
+
+
+def load_profile(path: Path) -> dict[str, object]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ProfileSpecError(f"profile is not valid JSON: {error.msg}") from error
+    except OSError as error:
+        raise ProfileSpecError(f"could not read profile: {error}") from error
+    return validate_profile(value)
+
+
 def _require_object(value: object, location: str) -> dict[str, object]:
     if not isinstance(value, dict):
         raise AnnotationSpecError(f"{location} must be an object")
@@ -305,6 +458,12 @@ def validate_annotation_spec(value: object) -> dict[str, object]:
         raise AnnotationSpecError("spec.start.type must be url or package")
     if not isinstance(start["value"], str) or not start["value"].strip():
         raise AnnotationSpecError("spec.start.value must be a non-empty string")
+    try:
+        parsed_start = parse_open_target(start["value"])
+    except ValueError as error:
+        raise AnnotationSpecError(f"spec.start.value: {error}") from error
+    if parsed_start["type"] != start["type"]:
+        raise AnnotationSpecError("spec.start.type does not match spec.start.value")
 
     steps = spec["steps"]
     if not isinstance(steps, list) or not steps:
@@ -568,7 +727,9 @@ def process_annotation_spec(
         raise AnnotationProcessingError("reviewed output path escapes the workspace")
     report_path = output_dir / "annotation-report.json"
     if report_path.exists():
-        raise AnnotationProcessingError("annotation report already exists; review or remove it explicitly")
+        raise AnnotationCollisionError(
+            "annotation report already exists; archive the reviewed output before retrying"
+        )
 
     jobs: list[tuple[dict[str, object], Path, Path, int, int]] = []
     for index, step in enumerate(spec["steps"]):
@@ -577,7 +738,7 @@ def process_annotation_spec(
             raise AnnotationProcessingError(f"raw capture is missing for step {step['id']}")
         destination = output_dir / f"{step['id']}.android.png"
         if destination.exists():
-            raise AnnotationProcessingError(f"reviewed output already exists for step {step['id']}")
+            raise AnnotationCollisionError(f"reviewed output already exists for step {step['id']}")
         width, height = _image_dimensions(magick, source)
         _validate_coordinates(step, width, height, f"spec.steps[{index}]")
         jobs.append((step, source, destination, width, height))
@@ -706,6 +867,16 @@ def command_foreground_package(_args: argparse.Namespace) -> int:
     return 0
 
 
+def command_validate_profile(args: argparse.Namespace) -> int:
+    try:
+        profile = load_profile(Path(args.profile))
+    except ProfileSpecError as error:
+        print(json.dumps({"ok": False, "error": str(error)}))
+        return 65
+    print(json.dumps({"ok": True, "profile": profile["profile"]}))
+    return 0
+
+
 def update_key_value(path: Path, replacements: dict[str, str]) -> None:
     if not path.exists():
         return
@@ -750,6 +921,26 @@ def command_rewrite_avd(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_validate_spec(args: argparse.Namespace) -> int:
+    try:
+        spec = load_annotation_spec(Path(args.spec))
+    except AnnotationSpecError as error:
+        print(json.dumps({"ok": False, "error": str(error)}))
+        return 64
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "command": "validate",
+                "slug": spec["slug"],
+                "start_type": spec["start"]["type"],
+                "steps": len(spec["steps"]),
+            }
+        )
+    )
+    return 0
+
+
 def command_annotate(args: argparse.Namespace) -> int:
     try:
         result = process_annotation_spec(
@@ -758,6 +949,9 @@ def command_annotate(args: argparse.Namespace) -> int:
     except AnnotationSpecError as error:
         print(json.dumps({"ok": False, "error": str(error)}))
         return 64
+    except AnnotationCollisionError as error:
+        print(json.dumps({"ok": False, "error": str(error)}))
+        return 73
     except AnnotationProcessingError as error:
         print(json.dumps({"ok": False, "error": str(error)}))
         return 65
@@ -802,12 +996,20 @@ def build_parser() -> argparse.ArgumentParser:
     foreground_package = subparsers.add_parser("foreground-package")
     foreground_package.set_defaults(handler=command_foreground_package)
 
+    validate_profile_parser = subparsers.add_parser("validate-profile")
+    validate_profile_parser.add_argument("profile")
+    validate_profile_parser.set_defaults(handler=command_validate_profile)
+
     rewrite = subparsers.add_parser("rewrite-avd")
     rewrite.add_argument("avd_dir")
     rewrite.add_argument("old_name")
     rewrite.add_argument("new_name")
     rewrite.add_argument("avd_home")
     rewrite.set_defaults(handler=command_rewrite_avd)
+
+    validate_spec_parser = subparsers.add_parser("validate-spec")
+    validate_spec_parser.add_argument("spec")
+    validate_spec_parser.set_defaults(handler=command_validate_spec)
 
     annotate = subparsers.add_parser("annotate")
     annotate.add_argument("spec")

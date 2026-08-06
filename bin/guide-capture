@@ -89,6 +89,7 @@ Usage:
   guide-capture notifications android
   guide-capture back android
   guide-capture shot android <id>
+  guide-capture validate <spec.json>
   guide-capture annotate <spec.json> [retained-run-id]
   guide-capture kill android
   guide-capture seal android
@@ -119,25 +120,62 @@ real_path() {
 
 safe_remove_run() {
   local candidate="$1"
-  local resolved runs_resolved
+  local resolved runs_resolved run_name
   resolved="$(real_path "$candidate")"
   runs_resolved="$(real_path "$RUNS_DIR")"
-  case "$resolved" in
-    "$runs_resolved"/android-*) ;;
-    *) fail 70 "refusing to remove a path outside the validated Android runs directory" ;;
-  esac
-  [[ "$resolved" != "$runs_resolved" ]] || fail 70 "refusing to remove the runs directory itself"
+  run_name="$(basename -- "$resolved")"
+  [[ "$(dirname -- "$resolved")" == "$runs_resolved" && "$run_name" =~ ^android-[A-Za-z0-9][A-Za-z0-9._-]*$ ]] \
+    || fail 70 "refusing to remove a path outside the validated Android runs directory"
   /bin/rm -rf -- "$resolved"
 }
 
 load_state() {
   [[ -f "$STATE_FILE" ]] || fail 69 "no active Android run"
-  "$JQ" -e '.schema_version == 1 and (.run_dir | type == "string")' "$STATE_FILE" >/dev/null \
+  "$JQ" -e '
+    (keys | sort) == (["avd_home", "avd_name", "emulator_pid", "run_dir", "run_id", "schema_version", "serial"] | sort) and
+    .schema_version == 1 and
+    (.run_id | type == "string" and test("^android-[A-Za-z0-9][A-Za-z0-9._-]*$")) and
+    (.run_dir | type == "string" and length > 0) and
+    (.avd_home | type == "string" and length > 0) and
+    (.avd_name | type == "string" and test("^[A-Za-z0-9][A-Za-z0-9._-]*$")) and
+    (.serial | type == "string" and length > 0) and
+    (.emulator_pid | type == "number" and . > 1 and floor == .)
+  ' "$STATE_FILE" >/dev/null \
     || fail 65 "current run state is invalid"
+
+  local run_id run_dir avd_home serial resolved runs_resolved
+  run_id="$($JQ -er '.run_id' "$STATE_FILE")"
+  run_dir="$($JQ -er '.run_dir' "$STATE_FILE")"
+  avd_home="$($JQ -er '.avd_home' "$STATE_FILE")"
+  serial="$($JQ -er '.serial' "$STATE_FILE")"
+  resolved="$(real_path "$run_dir")"
+  runs_resolved="$(real_path "$RUNS_DIR")"
+  [[ ! -L "$run_dir" && "$(dirname -- "$resolved")" == "$runs_resolved" && "$(basename -- "$resolved")" == "$run_id" ]] \
+    || fail 65 "current run directory is invalid"
+  [[ "$avd_home" == "$run_dir/avd" ]] || fail 65 "current AVD directory is invalid"
+  [[ "$serial" == "emulator-$EMULATOR_PORT" ]] || fail 65 "current emulator serial is invalid"
 }
 
 state_value() {
   "$JQ" -er ".$1" "$STATE_FILE"
+}
+
+require_manifest() {
+  local result
+  if ! result="$($PYTHON "$HELPER" validate-profile "$MANIFEST")"; then
+    fail 65 "$(printf '%s' "$result" | "$JQ" -r '.error // "Android profile is invalid"')"
+  fi
+}
+
+require_annotation_spec() {
+  local spec="$1" specs_resolved
+  [[ -f "$spec" ]] || fail 66 "annotation specification is missing"
+  SPEC_RESOLVED="$(real_path "$spec")"
+  specs_resolved="$(real_path "$REPO_ROOT/specs")"
+  case "$SPEC_RESOLVED" in
+    "$specs_resolved"/*.json) ;;
+    *) fail 64 "annotation specification must be a JSON file inside specs/" ;;
+  esac
 }
 
 adb_start() {
@@ -221,7 +259,7 @@ command_doctor() {
   DOCTOR_FAILURES=0
 
   local tool
-  for tool in "$ADB" "$EMULATOR" "$AGE" "$ZSTD" "$MAGICK" "$JQ" "$PYTHON" "$TAR" "$SHASUM" "$NODE"; do
+  for tool in "$ADB" "$EMULATOR" "$AGE" "$ZSTD" "$MAGICK" "$JQ" "$PYTHON" "$TAR" "$SHASUM" "$STAT" "$NODE"; do
     if [[ -x "$tool" ]]; then
       doctor_add "binary:$tool" true "available"
     else
@@ -229,44 +267,73 @@ command_doctor() {
     fi
   done
 
-  local image_dir="$ANDROID_HOME/system-images/android-36/google_apis_playstore/arm64-v8a"
-  local revision="missing"
-  if [[ -f "$image_dir/source.properties" ]]; then
-    revision="$(/usr/bin/awk -F= '$1 == "Pkg.Revision" {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}' "$image_dir/source.properties")"
-  fi
-  doctor_add system-image "$([[ "$revision" == "7" ]] && echo true || echo false)" "revision=$revision"
-
   local runtime_mode
-  runtime_mode="$($STAT -f '%Lp' "$RUNTIME_ROOT")"
-  doctor_add runtime-permissions "$([[ "$runtime_mode" == "700" ]] && echo true || echo false)" "mode=$runtime_mode"
+  if [[ -x "$STAT" ]]; then
+    runtime_mode="$($STAT -f '%Lp' "$RUNTIME_ROOT")"
+    doctor_add runtime-permissions "$([[ "$runtime_mode" == "700" ]] && echo true || echo false)" "mode=$runtime_mode"
+  fi
 
-  if "$JQ" -e '.schema_version == 1' "$MANIFEST" >/dev/null 2>&1; then
+  local manifest_ok=false manifest_result manifest_detail
+  if [[ -x "$PYTHON" ]] && manifest_result="$($PYTHON "$HELPER" validate-profile "$MANIFEST")"; then
+    manifest_ok=true
     doctor_add manifest true "valid schema"
   else
-    doctor_add manifest false "missing or invalid"
+    manifest_detail="$(printf '%s' "${manifest_result:-}" | "$JQ" -r '.error // "missing or invalid"' 2>/dev/null || echo "missing or invalid")"
+    doctor_add manifest false "$manifest_detail"
+  fi
+
+  local image_package expected_revision image_dir revision=missing
+  if [[ "$manifest_ok" == true ]]; then
+    image_package="$($JQ -er '.system_image.package' "$MANIFEST")"
+    expected_revision="$($JQ -er '.system_image.revision' "$MANIFEST")"
+    image_dir="$ANDROID_HOME/$(printf '%s' "$image_package" | /usr/bin/tr ';' '/')"
+    if [[ -f "$image_dir/source.properties" ]]; then
+      revision="$(/usr/bin/awk -F= '$1 == "Pkg.Revision" {gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2}' "$image_dir/source.properties")"
+    fi
+    doctor_add system-image "$([[ "$revision" == "$expected_revision" ]] && echo true || echo false)" \
+      "package=$image_package; revision=$revision"
+  else
+    doctor_add system-image false "profile unavailable"
   fi
 
   local expected_hash actual_hash
-  expected_hash="$($JQ -r '.sealed.archive_sha256 // empty' "$MANIFEST" 2>/dev/null || true)"
-  if [[ -f "$SEALED_GOLDEN" ]]; then
+  expected_hash="$([[ "$manifest_ok" == true ]] && "$JQ" -r '.sealed.archive_sha256' "$MANIFEST" || true)"
+  if [[ -f "$SEALED_GOLDEN" && -x "$SHASUM" && "$manifest_ok" == true ]]; then
     actual_hash="$($SHASUM -a 256 "$SEALED_GOLDEN" | /usr/bin/awk '{print $1}')"
     doctor_add sealed-golden "$([[ -n "$expected_hash" && "$actual_hash" == "$expected_hash" ]] && echo true || echo false)" \
       "encrypted archive present; manifest hash $([[ "$actual_hash" == "$expected_hash" ]] && echo matches || echo differs)"
-  else
+  elif [[ ! -f "$SEALED_GOLDEN" ]]; then
     doctor_add sealed-golden false "encrypted archive missing"
+  else
+    doctor_add sealed-golden false "hash verification unavailable"
   fi
 
-  local emulator_version adb_version magick_version expected_emulator expected_emulator_build expected_adb expected_adb_build
-  emulator_version="$($EMULATOR -version 2>&1 | /usr/bin/head -1)"
-  adb_version="$($ADB version 2>&1 | /usr/bin/head -2 | /usr/bin/tr '\n' ' ')"
-  magick_version="$($MAGICK -version 2>&1 | /usr/bin/head -1)"
-  expected_emulator="$($JQ -r '.emulator.version' "$MANIFEST")"
-  expected_emulator_build="$($JQ -r '.emulator.build' "$MANIFEST")"
-  expected_adb="$($JQ -r '.adb.version' "$MANIFEST")"
-  expected_adb_build="$($JQ -r '.adb.build' "$MANIFEST")"
-  doctor_add emulator-version "$([[ "$emulator_version" == *"$expected_emulator"*"$expected_emulator_build"* ]] && echo true || echo false)" "$emulator_version"
-  doctor_add adb-version "$([[ "$adb_version" == *"$expected_adb"*"$expected_adb_build"* ]] && echo true || echo false)" "$adb_version"
-  doctor_add imagemagick true "$magick_version"
+  local emulator_version adb_version magick_version node_version
+  local expected_emulator expected_emulator_build expected_adb expected_adb_build
+  if [[ -x "$EMULATOR" && "$manifest_ok" == true ]]; then
+    emulator_version="$($EMULATOR -version 2>&1 | /usr/bin/head -1)"
+    expected_emulator="$($JQ -r '.emulator.version' "$MANIFEST")"
+    expected_emulator_build="$($JQ -r '.emulator.build' "$MANIFEST")"
+    doctor_add emulator-version "$([[ "$emulator_version" == *"$expected_emulator"*"$expected_emulator_build"* ]] && echo true || echo false)" "$emulator_version"
+  fi
+  if [[ -x "$ADB" && "$manifest_ok" == true ]]; then
+    adb_version="$($ADB version 2>&1 | /usr/bin/head -2 | /usr/bin/tr '\n' ' ')"
+    expected_adb="$($JQ -r '.adb.version' "$MANIFEST")"
+    expected_adb_build="$($JQ -r '.adb.build' "$MANIFEST")"
+    doctor_add adb-version "$([[ "$adb_version" == *"$expected_adb"*"$expected_adb_build"* ]] && echo true || echo false)" "$adb_version"
+  fi
+  if [[ -x "$MAGICK" ]]; then
+    magick_version="$($MAGICK -version 2>&1 | /usr/bin/head -1)"
+    doctor_add imagemagick true "$magick_version"
+  fi
+  if [[ -x "$NODE" ]]; then
+    node_version="$($NODE --version 2>&1)"
+    if "$NODE" -e 'process.exit(typeof fetch === "function" && typeof WebSocket === "function" ? 0 : 1)'; then
+      doctor_add node-runtime true "$node_version; fetch and WebSocket available"
+    else
+      doctor_add node-runtime false "$node_version; fetch or WebSocket missing"
+    fi
+  fi
 
   local annotation_font=missing font_candidate
   for font_candidate in /System/Library/Fonts/SFNS.ttf /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf; do
@@ -338,6 +405,7 @@ command_boot() {
   require_no_extra_args "$@"
   ensure_runtime_dirs
   [[ ! -e "$STATE_FILE" ]] || fail 69 "an Android run is already active"
+  require_manifest
   [[ -f "$SEALED_GOLDEN" ]] || fail 66 "sealed Android golden is missing"
 
   local expected_hash actual_hash
@@ -346,11 +414,16 @@ command_boot() {
   [[ "$actual_hash" == "$expected_hash" ]] || fail 65 "sealed Android golden hash differs from the manifest"
 
   local token source_name avd_name avd_home source_dir avd_dir state_tmp emulator_log
+  local system_image_package android_target os2_id chrome_id
   token="$(timestamp_id)"
   RUN_ID="android-$token"
   RUN_DIR="$RUNS_DIR/$RUN_ID"
   avd_home="$RUN_DIR/avd"
   source_name="$($JQ -er '.source_avd' "$MANIFEST")"
+  system_image_package="$($JQ -er '.system_image.package' "$MANIFEST")"
+  IFS=';' read -r _ android_target _ _ <<<"$system_image_package"
+  os2_id="$($JQ -er '.packages.os2faktor.id' "$MANIFEST")"
+  chrome_id="$($JQ -er '.packages.chrome.id' "$MANIFEST")"
   avd_name="edb-phone-run-${token//[^A-Za-z0-9]/}"
   SERIAL="emulator-$EMULATOR_PORT"
   RUN_LOG_DIR="$LOGS_DIR/$RUN_ID"
@@ -371,7 +444,7 @@ command_boot() {
   /bin/mv -- "$source_dir" "$avd_dir"
   /bin/rm -f -- "$avd_home/$source_name.ini"
   "$PYTHON" "$HELPER" rewrite-avd "$avd_dir" "$source_name" "$avd_name" "$avd_home" >/dev/null
-  printf 'avd.ini.encoding=UTF-8\npath=%s\ntarget=android-36\n' "$avd_dir" >"$avd_home/$avd_name.ini"
+  printf 'avd.ini.encoding=UTF-8\npath=%s\ntarget=%s\n' "$avd_dir" "$android_target" >"$avd_home/$avd_name.ini"
 
   "$ADB" kill-server >/dev/null 2>&1 || true
   adb_start
@@ -396,10 +469,10 @@ command_boot() {
   timezone="$(adb_target shell getprop persist.sys.timezone | /usr/bin/tr -d '\r')"
   fingerprint="$(adb_target shell getprop ro.build.fingerprint | /usr/bin/tr -d '\r')"
   size="$(adb_target shell wm size | /usr/bin/awk -F': ' '/Physical size/ {print $2}' | /usr/bin/tr -d '\r')"
-  os2_name="$(adb_target shell dumpsys package dk.digitalidentity.os2faktor | /usr/bin/awk -F= '/versionName=/ {print $2; exit}' | /usr/bin/tr -d '\r')"
-  os2_code="$(adb_target shell dumpsys package dk.digitalidentity.os2faktor | "$PYTHON" "$HELPER" package-version-code | /usr/bin/tr -d '\r')"
-  chrome_name="$(adb_target shell dumpsys package com.android.chrome | /usr/bin/awk -F= '/versionName=/ {print $2; exit}' | /usr/bin/tr -d '\r')"
-  chrome_code="$(adb_target shell dumpsys package com.android.chrome | "$PYTHON" "$HELPER" package-version-code | /usr/bin/tr -d '\r')"
+  os2_name="$(adb_target shell dumpsys package "$os2_id" | /usr/bin/awk -F= '/versionName=/ {print $2; exit}' | /usr/bin/tr -d '\r')"
+  os2_code="$(adb_target shell dumpsys package "$os2_id" | "$PYTHON" "$HELPER" package-version-code | /usr/bin/tr -d '\r')"
+  chrome_name="$(adb_target shell dumpsys package "$chrome_id" | /usr/bin/awk -F= '/versionName=/ {print $2; exit}' | /usr/bin/tr -d '\r')"
+  chrome_code="$(adb_target shell dumpsys package "$chrome_id" | "$PYTHON" "$HELPER" package-version-code | /usr/bin/tr -d '\r')"
 
   verify_equal locale "$locale" "$($JQ -er '.android.locale' "$MANIFEST")"
   verify_equal timezone "$timezone" "$($JQ -er '.android.timezone' "$MANIFEST")"
@@ -410,7 +483,7 @@ command_boot() {
   verify_equal chrome-version "$chrome_name" "$($JQ -er '.packages.chrome.version_name' "$MANIFEST")"
   verify_equal chrome-version-code "$chrome_code" "$($JQ -er '.packages.chrome.version_code' "$MANIFEST")"
 
-  local setting demo_mode demo_state notifications status_bar_fallback
+  local setting demo_mode demo_state expected_demo_mode notifications status_bar_fallback
   for setting in window_animation_scale transition_animation_scale animator_duration_scale; do
     adb_target shell settings put global "$setting" 0
   done
@@ -423,9 +496,11 @@ command_boot() {
   adb_target shell am broadcast -a com.android.systemui.demo -e command notifications -e visible false >/dev/null || demo_mode=unsupported
   demo_state="$(adb_target shell settings get global sysui_tuner_demo_on | /usr/bin/tr -d '\r')"
   [[ "$demo_state" == 1 ]] || demo_mode=unsupported
+  expected_demo_mode="$($JQ -r 'if .status_bar.demo_mode_supported then "enabled" else "unsupported" end' "$MANIFEST")"
+  verify_equal status-bar-demo-mode "$demo_mode" "$expected_demo_mode"
   status_bar_fallback=none
   if [[ "$demo_mode" == unsupported ]]; then
-    status_bar_fallback=live-short-run
+    status_bar_fallback="$($JQ -er '.status_bar.fallback' "$MANIFEST")"
     adb_target shell am broadcast -a com.android.systemui.demo -e command exit >/dev/null 2>&1 || true
   fi
 
@@ -512,9 +587,9 @@ selector_failure() {
   diagnostic_shot selector-failure
   human "Selector $reason. Evidence was saved without printing UI contents."
   log_event failure
-  "$JQ" -nc --arg reason "$reason" --argjson count "$count" --arg xml "$xml" --arg nodes "$nodes" \
+  "$JQ" -nc --arg command "$COMMAND_NAME" --arg reason "$reason" --argjson count "$count" --arg xml "$xml" --arg nodes "$nodes" \
     --arg screenshot "$DIAGNOSTIC_PATH" \
-    '{ok:false, command:"selector", reason:$reason, count:$count, xml:$xml, nodes:$nodes, screenshot:$screenshot}'
+    '{ok:false, command:$command, reason:$reason, count:$count, xml:$xml, nodes:$nodes, screenshot:$screenshot}'
 }
 
 command_wait() {
@@ -825,20 +900,32 @@ command_shot() {
     '{ok:true, command:"shot", platform:"android", id:$id, path:$path, dimensions:$dimensions, sha256:$sha256, device_time:$device_time}'
 }
 
+command_validate() {
+  [[ "$#" -eq 1 ]] || fail 64 "validate requires one JSON specification"
+  ensure_runtime_dirs
+  require_annotation_spec "$1"
+
+  local result status error
+  if result="$($PYTHON "$HELPER" validate-spec "$SPEC_RESOLVED")"; then
+    human "Validated the annotation specification."
+    log_event success
+    printf '%s\n' "$result"
+    return 0
+  else
+    status=$?
+    error="$(printf '%s' "$result" | "$JQ" -r '.error // "specification validation failed"')"
+    fail "$status" "$error"
+  fi
+}
+
 command_annotate() {
   [[ "$#" -ge 1 && "$#" -le 2 ]] \
     || fail 64 "annotate requires one JSON specification and an optional retained run ID"
   ensure_runtime_dirs
 
-  local spec="$1" retained_run_id="${2:-}" spec_resolved specs_resolved run_id raw_dir
+  local retained_run_id="${2:-}" run_id raw_dir
   local raw_resolved raw_root_resolved result status error
-  [[ -f "$spec" ]] || fail 66 "annotation specification is missing"
-  spec_resolved="$(real_path "$spec")"
-  specs_resolved="$(real_path "$REPO_ROOT/specs")"
-  case "$spec_resolved" in
-    "$specs_resolved"/*.json) ;;
-    *) fail 64 "annotation specification must be a JSON file inside automation/specs" ;;
-  esac
+  require_annotation_spec "$1"
 
   if [[ -n "$retained_run_id" ]]; then
     run_id="$retained_run_id"
@@ -855,7 +942,7 @@ command_annotate() {
     || fail 65 "raw capture run resolved outside the expected directory"
   /bin/mkdir -p "$REVIEWED_DIR"
   /bin/chmod 700 "$REVIEWED_DIR"
-  if result="$($PYTHON "$HELPER" annotate "$spec_resolved" "$raw_dir" "$REVIEWED_DIR" "$MAGICK")"; then
+  if result="$($PYTHON "$HELPER" annotate "$SPEC_RESOLVED" "$raw_dir" "$REVIEWED_DIR" "$MAGICK")"; then
     human "Prepared redacted Android images for human review."
     log_event success
     printf '%s\n' "$result"
@@ -909,6 +996,7 @@ command_seal() {
   require_no_extra_args "$@"
   ensure_runtime_dirs
   [[ ! -e "$STATE_FILE" ]] || fail 69 "an Android run is active"
+  require_manifest
   [[ ! -e "$SEALED_GOLDEN" ]] || fail 73 "sealed Android golden already exists"
 
   local source_name source_dir source_ini device avd_name temporary_archive manifest_tmp sealed_at sha256
@@ -996,6 +1084,10 @@ case "$COMMAND_NAME" in
   shot)
     shift
     command_shot "$@"
+    ;;
+  validate)
+    shift
+    command_validate "$@"
     ;;
   annotate)
     shift
