@@ -30,7 +30,8 @@ python3 -m unittest discover -s tests -k relative_paths
 ImageMagick installed those tests error rather than skip. `prek run --all-files` adds Gitleaks and
 the sensitive-path guard; the commit-msg hook enforces Conventional Commits.
 `bin/guide-capture doctor` checks the live machine and needs the sealed golden, so it is not part
-of the suite.
+of the suite. `.github/workflows/ci.yml` runs these checks on macOS 15 ARM64, plus
+`bin/check-sensitive-files --all` to protect fresh checkouts. See `CI.md`.
 
 ## Ownership
 
