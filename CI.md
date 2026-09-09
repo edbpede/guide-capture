@@ -23,6 +23,7 @@ The encrypted live capture workflow and pinned Android environment require their
 existing manual procedure. There is no application build or dependency lock to
 invent for these standalone tools; static Python typing is a remaining gap.
 
-Protection requires strict up-to-date `ci / required` from GitHub Actions,
-enforced administrators, no force-push/deletion bypass and zero blanket reviews.
-Automerge remains off until native validation, settings and shared policy are ready.
+Native GitHub automerge remains disabled. This initial rollout uses the base
+dependency preset only; checked merging is not enabled. Any later opt-in must
+verify current-head CI, dispatch inputs, required-job policy and permissions.
+No branch protection or rulesets are assumed.
