@@ -1,6 +1,6 @@
 # Development CI
 
-Every PR and default-branch push runs the existing prek checks on native macOS 15
+Every PR and default-branch push runs the existing prek checks on native macOS 26
 ARM64: system Bash 3.2 parsing, ShellCheck, Python unit/annotation/wrapper tests,
 Node syntax, Gitleaks and repository hygiene. The runner must have the fixed
 Homebrew paths used by the application. ImageMagick and ShellCheck are installed
