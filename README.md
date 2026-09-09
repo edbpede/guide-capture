@@ -72,7 +72,7 @@ emulator/ADB versions, required tools, profile, font, permissions, and sealed ar
 ## Setup
 
 ```bash
-git clone git@github.com:edbpede/guide-capture.git
+git clone git@github.com:edbfi/guide-capture.git
 cd guide-capture
 prek install --hook-type pre-commit --hook-type commit-msg
 ```

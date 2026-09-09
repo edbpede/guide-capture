@@ -8,6 +8,12 @@ export PATH
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$REPO_ROOT"
 
+case "${1:-}" in
+  "") all_files=0 ;;
+  --all) all_files=1 ;;
+  *) printf 'Usage: bin/check-sensitive-files [--all]\n' >&2; exit 64 ;;
+esac
+
 rejected=0
 while IFS= read -r -d '' path; do
   case "$path" in
@@ -19,11 +25,15 @@ while IFS= read -r -d '' path; do
       private/* | runtime/* | raw-captures/* | current-run.json | \
       .env | .env.* | */.env | */.env.* | \
       auth-state* | */auth-state*)
-      printf 'Refusing sensitive staged path: %s\n' "$path" >&2
+      printf 'Refusing sensitive tracked or staged path: %s\n' "$path" >&2
       rejected=1
       ;;
   esac
-done < <(git diff --cached --name-only --diff-filter=ACMR -z)
+done < <(if [[ "$all_files" -eq 1 ]]; then
+  git ls-files -z
+else
+  git diff --cached --name-only --diff-filter=ACMR -z
+fi)
 
 if [[ "$rejected" -ne 0 ]]; then
   printf 'Remove credential-bearing Android or authentication state from the index before committing.\n' >&2

@@ -1,6 +1,6 @@
 ---
 name: guide-capture
-description: Capture, verify, redact, annotate, and stage reproducible Android screenshots for the edbpede guides site. Use when Codex needs to capture or recapture an Android guide flow, operate the encrypted guide-capture emulator through its wrapper, prepare reviewed PNG variants from a JSON step specification, or report evidence for a failed capture step.
+description: Capture, verify, redact, annotate, and stage reproducible Android screenshots for the guides.edb.fi site. Use when Codex needs to capture or recapture an Android guide flow, operate the encrypted guide-capture emulator through its wrapper, prepare reviewed PNG variants from a JSON step specification, or report evidence for a failed capture step.
 ---
 
 # Guide Capture

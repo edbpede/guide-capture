@@ -1,0 +1,78 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr-number:
+        description: PR number for a repair dispatch
+        type: string
+        default: ''
+      expected-head-sha:
+        description: Exact repaired PR commit
+        type: string
+        default: ''
+permissions:
+  contents: read
+  pull-requests: read
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: edbfi/automation/actions/dispatch-guard@v1.0.0
+        with:
+          token: ${{ github.token }}
+          pr-number: ${{ inputs.pr-number }}
+          expected-head-sha: ${{ inputs.expected-head-sha }}
+  capture-tools:
+    needs: guard
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install native test prerequisites
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: brew install imagemagick shellcheck
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24.20.0'
+      - name: Check native paths and Bash 3.2
+        run: |
+          test "$(uname -m)" = arm64
+          test -x /opt/homebrew/bin/python3
+          test -x /opt/homebrew/bin/magick
+          test -x /usr/bin/jq
+          /bin/bash -n bin/guide-capture
+          /bin/bash -n bin/check-sensitive-files
+      - uses: j178/prek-action@v3.0.0
+        with:
+          # renovate: datasource=github-releases depName=j178/prek
+          prek-version: 0.5.2
+          extra-args: --all-files
+      - name: Check all tracked paths on the fresh CI checkout
+        run: bin/check-sensitive-files --all
+      - run: git diff --exit-code HEAD
+  required:
+    name: ci / required
+    if: always()
+    needs: [guard, capture-tools]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: edbfi/automation/actions/dispatch-guard@v1.0.0
+        with:
+          token: ${{ github.token }}
+          pr-number: ${{ inputs.pr-number }}
+          expected-head-sha: ${{ inputs.expected-head-sha }}
+      - uses: edbfi/automation/actions/gate@v1.0.0
+        with:
+          needs: ${{ toJSON(needs) }}
+          required: guard capture-tools
