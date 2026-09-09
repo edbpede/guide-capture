@@ -31,7 +31,7 @@ jobs:
           expected-head-sha: ${{ inputs.expected-head-sha }}
   capture-tools:
     needs: guard
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7.0.1
