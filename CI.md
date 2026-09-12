@@ -23,7 +23,10 @@ The encrypted live capture workflow and pinned Android environment require their
 existing manual procedure. There is no application build or dependency lock to
 invent for these standalone tools; static Python typing is a remaining gap.
 
-Native GitHub automerge remains disabled. This initial rollout uses the base
-dependency preset only; checked merging is not enabled. Any later opt-in must
-verify current-head CI, dispatch inputs, required-job policy and permissions.
-No branch protection or rulesets are assumed.
+The shared dispatch guard and aggregate gate verify explicit PR and final commit
+SHAs and reject missing, skipped or failed prerequisites. Renovate updates merge
+unattended after every required job passes on the current revision, including
+majors and shared-policy updates. The checked action verifies genuine author
+sign-offs and dispatches exact-commit final CI. No dashboard approvals, branch
+protections or rulesets are configured; native GitHub automerge stays disabled.
+Other changes retain full manual review and the maintainer's ghmerge process.
