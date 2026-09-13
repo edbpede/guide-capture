@@ -60,7 +60,7 @@ jobs:
       - uses: j178/prek-action@v3.0.0
         with:
           # renovate: datasource=github-releases depName=j178/prek
-          prek-version: 0.5.2
+          prek-version: 0.5.3
           extra-args: --all-files
       - name: Check all tracked paths on the fresh CI checkout
         run: bin/check-sensitive-files --all
